@@ -21,6 +21,11 @@ pub struct Application {
     /// Machine name: lowercase alphanumerics and dashes, at most 63 chars.
     pub name: String,
     pub description: Option<String>,
+    /// The backup schedule: a 5-field cron expression (minute hour
+    /// day-of-month month day-of-week). Validated at configuration time;
+    /// executed by `schedule run` and the generated systemd timer.
+    #[serde(default)]
+    pub schedule: Option<String>,
     pub sources: Vec<Source>,
     pub databases: Vec<Database>,
     pub volumes: Vec<Volume>,
@@ -396,6 +401,7 @@ mod tests {
         Application {
             name: "thornwa".to_string(),
             description: Some("ThornWA compose stack".to_string()),
+            schedule: Some("30 2 * * *".to_string()),
             sources: vec![
                 Source {
                     name: "uploads".to_string(),

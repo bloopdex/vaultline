@@ -9,12 +9,16 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorKind, Result, VaultlineError};
 use crate::model::BackupSnapshot;
 
 /// The state-file schema version. Bump only with a migration story.
+/// Phase 5 added the optional [`Operations`] records with
+/// `#[serde(default)]` — additive and backward-compatible both ways, so
+/// the version stays 1.
 pub const STATE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +40,47 @@ impl Default for State {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppState {
     pub snapshots: Vec<BackupSnapshot>,
+    /// Operations bookkeeping (Phase 5): schedule runs and prune outcomes.
+    /// Optional for backward compatibility with state files written before
+    /// the operations phase.
+    #[serde(default)]
+    pub operations: Operations,
+}
+
+/// The operations record: what the schedule executor and the prune command
+/// have done, and when. Snapshots themselves stay immutable — pruning
+/// records which ids were forgotten, never rewrites a snapshot's record.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Operations {
+    /// When the verification schedule last ran (the `schedule run`
+    /// executor's bookkeeping — manual `backup verify` does not count).
+    pub last_verify_at: Option<DateTime<Utc>>,
+    /// When a prune last executed (dry-runs do not count).
+    pub last_prune_at: Option<DateTime<Utc>>,
+    /// The applied prune outcomes, oldest first.
+    #[serde(default)]
+    pub prunes: Vec<PruneRecord>,
+}
+
+/// One applied prune: which recorded snapshots were forgotten from the
+/// engine, and how many were kept.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PruneRecord {
+    pub at: DateTime<Utc>,
+    /// Recorded snapshot ids forgotten from the engine.
+    #[serde(default)]
+    pub forgotten: Vec<String>,
+    /// How many recorded snapshots the retention plan kept.
+    pub kept: usize,
+}
+
+impl Operations {
+    /// Whether any prune has forgotten this snapshot id.
+    pub fn is_pruned(&self, snapshot_id: &str) -> bool {
+        self.prunes
+            .iter()
+            .any(|record| record.forgotten.iter().any(|id| id == snapshot_id))
+    }
 }
 
 impl State {

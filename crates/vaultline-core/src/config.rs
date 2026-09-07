@@ -37,6 +37,10 @@ pub struct WireApplication {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The backup schedule (5-field cron). Executed by `schedule run` and
+    /// the generated systemd timer.
+    #[serde(default)]
+    pub schedule: Option<String>,
     #[serde(default)]
     pub sources: WireSources,
     #[serde(default)]
@@ -513,8 +517,41 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
         ));
     }
 
-    // Verification: level range, and honest warnings for policy fields that
-    // are recorded but not yet executed.
+    // Schedules (Phase 5): both crons are validated now — they execute
+    // through `schedule run` and the generated systemd timers. A cron the
+    // crate accepts but OnCalendar cannot express still schedules fine
+    // under `schedule run`; timer generation will refuse it — warned here
+    // so systemd hosts learn at validate time.
+    if let Some(schedule) = &app.schedule {
+        match crate::cron::parse_schedule(schedule) {
+            Err(message) => errors.push(ValidationError::new("application.schedule", message)),
+            Ok(_) => {
+                if let Err(message) = crate::cron::to_on_calendar(schedule) {
+                    warnings.push(Warning::new(format!(
+                        "application.schedule: {message} (vaultline timer generate will refuse it; vaultline schedule run still works)"
+                    )));
+                }
+            }
+        }
+    }
+    if let Some(schedule) = &app.verification.schedule {
+        match crate::cron::parse_schedule(schedule) {
+            Err(message) => errors.push(ValidationError::new(
+                "application.verification.schedule",
+                message,
+            )),
+            Ok(_) => {
+                if let Err(message) = crate::cron::to_on_calendar(schedule) {
+                    warnings.push(Warning::new(format!(
+                        "application.verification.schedule: {message} (vaultline timer generate will refuse it; vaultline schedule run still works)"
+                    )));
+                }
+            }
+        }
+    }
+
+    // Verification: level range, and an honest warning for policy fields
+    // that are recorded but not yet executed.
     let level = match VerificationLevel::from_number(app.verification.level) {
         Some(level) => Some(level),
         None => {
@@ -525,11 +562,6 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
             None
         }
     };
-    if app.verification.schedule.is_some() {
-        warnings.push(Warning::new(
-            "application.verification.schedule is recorded but not yet executed (scheduling arrives in a later phase)",
-        ));
-    }
     if !app.verification.app_checks.is_empty() {
         warnings.push(Warning::new(
             "application.verification.app_checks are recorded but not yet executed (app-semantic checks arrive in a later phase)",
@@ -777,6 +809,7 @@ fn convert(
     Application {
         name: app.name.clone(),
         description: app.description.clone(),
+        schedule: app.schedule.clone(),
         sources,
         databases,
         volumes,
@@ -827,6 +860,7 @@ mod tests {
 [application]
 name = "thornwa"
 description = "ThornWA compose stack"
+schedule = "30 2 * * *"
 
 [[application.sources.files]]
 name = "uploads"
@@ -896,9 +930,15 @@ wait_healthy = { url = "http://localhost:3000/health" }
         assert_eq!(app.volumes.len(), 1);
         assert_eq!(app.restore.steps.len(), 4);
         assert_eq!(app.verification.level, VerificationLevel::L3);
-        // The schedule and app_checks are recorded but not yet executed —
-        // expect exactly those two warnings.
-        assert_eq!(outcome.warnings.len(), 2);
+        assert_eq!(
+            app.schedule.as_deref(),
+            Some("30 2 * * *"),
+            "the backup schedule converts"
+        );
+        // Only app_checks are recorded-not-executed now — the schedule
+        // warnings retired with Phase 5 execution.
+        assert_eq!(outcome.warnings.len(), 1);
+        assert!(outcome.warnings[0].message.contains("app_checks"));
     }
 
     #[test]
@@ -1134,6 +1174,38 @@ level = 1
         assert!(validate_application_name("thornwa-").is_err());
         assert!(validate_application_name(&"a".repeat(64)).is_err());
         assert!(validate_application_name(&"a".repeat(63)).is_ok());
+    }
+
+    #[test]
+    fn invalid_schedules_are_rejected_at_validation() {
+        let mut contents = VALID.to_string();
+        contents = contents.replace(
+            "schedule = \"30 2 * * *\"",
+            "schedule = \"2 30 * * * 2026\"",
+        );
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.path == "application.schedule"),
+            "{:?}",
+            outcome.errors
+        );
+
+        let mut contents = VALID.to_string();
+        contents = contents.replace("schedule = \"0 3 * * 7\"", "schedule = \"at three\"");
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.path == "application.verification.schedule"),
+            "{:?}",
+            outcome.errors
+        );
     }
 
     #[test]

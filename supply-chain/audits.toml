@@ -37,6 +37,12 @@ criteria = "safe-to-deploy"
 version = "1.1.0"
 notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
 
+[[audits.cron]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.17.0"
+notes = "Phase 5 manual review 2026-09-07: no unsafe anywhere; no ambient capabilities (no filesystem/network/environment/process access — pure parsing and calendar math); the winnow-combinator parser checks u32 conversion (overflow rejected) and rejects step-zero and out-of-range ordinals with errors, so no panic is reachable from malformed input (the one unwrap is guarded by a len()==1 short-circuit); next-occurrence computation is bounded nested iteration over ordinal sets with date-validity checks (NaiveDate::from_ymd_opt, LocalResult); phf name tables are compile-time generated; rand appears only as a build-time dependency of phf_generator (proc-macro codegen, not shipped in the binary)"
+
 [[audits.dirs]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
 criteria = "safe-to-deploy"
@@ -91,11 +97,41 @@ criteria = "safe-to-deploy"
 version = "0.12.1"
 notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
 
+[[audits.phf]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.11.3"
+notes = "Phase 5 structural review 2026-09-07: perfect-hash-map runtime tables used by cron's name tables. Zero unsafe, zero ambient capabilities (pure table lookup)"
+
+[[audits.phf_generator]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.11.3"
+notes = "Phase 5 structural review 2026-09-07: phf table codegen (build-time only). Zero unsafe, zero ambient capabilities; uses rand for seeded deterministic hashing during table construction"
+
+[[audits.phf_macros]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.11.3"
+notes = "Phase 5 structural review 2026-09-07: the phf! procedural macro. Zero unsafe, zero ambient capabilities; generated code is static lookup tables plus const hashing — deterministic and input-bounded"
+
+[[audits.phf_shared]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.11.3"
+notes = "Phase 5 structural review 2026-09-07: phf core (hashing + table format). Zero unsafe, zero ambient capabilities"
+
 [[audits.r-efi]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
 criteria = "safe-to-deploy"
 version = "6.0.0"
 notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.rand]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.8.8"
+notes = "Phase 5 structural review 2026-09-07: the canonical Rust RNG; here only a build-time dependency of phf_generator (proc-macro codegen), never shipped in the binary. No ambient capabilities beyond the documented std feature; unsafe is confined to invariant-guarded internals: range-validated from_u32_unchecked, bounds-checked get_unchecked, MaybeUninit array initialization, thread-local rng access, a Linux-only pthread_atfork handler, and nightly-only TrustedLen impls excluded on stable"
 
 [[audits.rand_core]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
@@ -144,6 +180,12 @@ who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
 criteria = "safe-to-deploy"
 version = "1.1.1"
 notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.siphasher]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.3"
+notes = "Phase 5 structural review 2026-09-07: SipHash 1-3/2-4 (the std HashMap lineage). No ambient capabilities; unsafe is confined to little-endian word loads in the hash core with documented caller preconditions (start+len bounds, len<8 debug-asserted)"
 
 [[audits.tempfile]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"

@@ -516,6 +516,7 @@ mod tests {
         Application {
             name: "thornwa".to_string(),
             description: None,
+            schedule: None,
             sources: Vec::new(),
             databases: Vec::new(),
             volumes: Vec::new(),

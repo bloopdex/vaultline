@@ -76,6 +76,11 @@ impl Restic {
         })
     }
 
+    /// The located binary path (for diagnostics).
+    pub fn bin_path(&self) -> &Path {
+        &self.bin
+    }
+
     /// Initialize the repository if it does not exist yet. `init` creates
     /// the repository (and the bucket, for s3 backends); an existing
     /// repository makes init fail with "already exists", which is treated
@@ -180,6 +185,27 @@ impl Restic {
         let output = command.output().map_err(|e| self.spawn_error(e))?;
         self.ensure_success(&output, password)?;
         parse_backup_summary(&output.stdout)
+    }
+
+    /// Forget the given snapshot ids (one `forget` invocation; ids are
+    /// argv entries, never a shell string).
+    pub fn forget(
+        &self,
+        ids: &[String],
+        repo: &str,
+        password: &str,
+        extra_envs: &[(String, String)],
+    ) -> Result<()> {
+        let output = self.run(&["forget"], ids, repo, password, extra_envs)?;
+        self.ensure_success(&output, password)
+    }
+
+    /// Reclaim repository space from forgotten snapshots. The engine's own
+    /// defaults govern repack aggressiveness (max-unused/max-repack) — the
+    /// engine is the authority on its repository internals.
+    pub fn prune(&self, repo: &str, password: &str, extra_envs: &[(String, String)]) -> Result<()> {
+        let output = self.run(&["prune"], &[], repo, password, extra_envs)?;
+        self.ensure_success(&output, password)
     }
 
     /// Verify repository integrity (the quick structural check — the

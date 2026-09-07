@@ -17,6 +17,8 @@ const TEMPLATE: &str = r#"# vaultline.toml — one Application Recovery Definiti
 [application]
 name = "{name}"
 description = "What this application is"
+# schedule = "30 2 * * *"     # backup schedule: 5-field cron (minute hour
+#                               day-of-month month day-of-week)
 
 # Sources: files, git remotes, and config references.
 # A config reference is RECORDED but never copied — secrets stay where they
@@ -67,8 +69,9 @@ keep_monthly = 6
 keep_yearly = 1
 
 # Verification: the level a snapshot must reach before it counts as healthy
-# (L1 command succeeded … L6 full recovery test). The schedule and app checks
-# are recorded now and executed by later phases.
+# (L1 command succeeded … L6 full recovery test). The schedule runs through
+# `vaultline schedule run` or the generated systemd timer; app_checks are
+# recorded for a later phase.
 [application.verification]
 level = 3
 # schedule = "0 3 * * 7"

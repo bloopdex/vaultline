@@ -54,6 +54,15 @@ pub enum Command {
     /// Restore a snapshot by executing the definition's restore procedure
     /// (sandbox-then-promote; never overwrites existing files).
     Restore(crate::restore::RestoreArgs),
+    /// Run whatever the definition's schedules make due (backup and/or
+    /// verification) and explain what ran and why.
+    Schedule(crate::schedule::ScheduleRunArgs),
+    /// Check the environment: configuration, tools, state, storage.
+    Doctor(crate::ops::DoctorArgs),
+    /// Summarize one application's records against its definition.
+    Status(crate::ops::StatusArgs),
+    /// Generate or install the systemd service/timer units.
+    Timer(crate::timer::TimerArgs),
 }
 
 #[derive(clap::Args)]
@@ -74,6 +83,9 @@ pub enum BackupCommand {
     Verify(crate::restore::BackupVerifyArgs),
     /// Show a snapshot's full record.
     Inspect(crate::restore::BackupInspectArgs),
+    /// Enforce the retention policy: plan per-snapshot keep/forget
+    /// decisions with reasons; forget + reclaim only with --apply.
+    Prune(crate::prune::BackupPruneArgs),
 }
 
 #[derive(clap::Args)]

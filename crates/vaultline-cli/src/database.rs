@@ -272,7 +272,7 @@ fn parse_key_value(value: &str) -> Result<ConnInfo> {
     Ok(info)
 }
 
-fn locate_tool(env_name: &str, tool_name: &str) -> Result<PathBuf> {
+pub(crate) fn locate_tool(env_name: &str, tool_name: &str) -> Result<PathBuf> {
     if let Some(bin) = std::env::var_os(env_name) {
         let path = PathBuf::from(bin);
         if !path.is_file() {
