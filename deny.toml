@@ -33,6 +33,10 @@ allow = [
     "CC0-1.0",
     "MIT-0",
     "OpenSSL",
+    # MPL-2.0 (option-ext via dirs-sys): file-level copyleft only —
+    # acceptable for a statically linked CLI; no distribution obligations
+    # beyond keeping MPL files under MPL.
+    "MPL-2.0",
 ]
 exceptions = []
 

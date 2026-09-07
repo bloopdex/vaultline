@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.bitflags]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.13.1"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
 [[audits.chrono]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
 criteria = "safe-to-deploy"
@@ -31,11 +37,83 @@ criteria = "safe-to-deploy"
 version = "1.1.0"
 notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
 
+[[audits.dirs]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "6.0.0"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.dirs-sys]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.5.0"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.errno]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.14"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.fastrand]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.5.0"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.getrandom]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.2.17"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.getrandom]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.3"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
 [[audits.iana-time-zone]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.1.65"
 notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.libredox]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.23"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.linux-raw-sys]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.12.1"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.r-efi]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "6.0.0"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.rand_core]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.10.1"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.redox_users]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.5.2"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.rustix]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.1.4"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
 
 [[audits.serde]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
@@ -66,6 +144,24 @@ who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
 criteria = "safe-to-deploy"
 version = "1.1.1"
 notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.tempfile]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "3.27.0"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.thiserror]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.0.20"
+notes = "Phase 2 structural review 2026-09-07: no runtime networking; unsafe confined to system-call/FFI bindings (syscall crates) or parser internals; build scripts are cfg detection only (getrandom/rustix/thiserror); license files present"
+
+[[audits.thiserror-impl]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "2.0.20"
+notes = "Phase 2 structural review 2026-09-07: no build.rs, no networking, unsafe confined to proc-macro codegen (thiserror-impl) and raw ABI stubs (wasi)"
 
 [[audits.toml]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
@@ -102,6 +198,12 @@ who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.3.23"
 notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.wasi]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.11.1+wasi-snapshot-preview1"
+notes = "Phase 2 structural review 2026-09-07: no build.rs, no networking, unsafe confined to proc-macro codegen (thiserror-impl) and raw ABI stubs (wasi)"
 
 [[audits.winnow]]
 who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
