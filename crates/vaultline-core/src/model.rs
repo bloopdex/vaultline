@@ -203,6 +203,8 @@ pub enum StorageKind {
         host: String,
         port: u16,
         user: String,
+        /// Absolute directory on the remote host holding repositories.
+        path: String,
         #[serde(default)]
         key_file: Option<String>,
         #[serde(default)]

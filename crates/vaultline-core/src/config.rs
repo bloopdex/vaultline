@@ -481,6 +481,12 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
                     "sftp storage requires user",
                 ));
             }
+            if app.storage.path.as_deref().unwrap_or("").is_empty() {
+                errors.push(ValidationError::new(
+                    "application.storage.path",
+                    "sftp storage requires path (the remote directory holding repositories)",
+                ));
+            }
             match app.storage.port {
                 None | Some(0) => errors.push(ValidationError::new(
                     "application.storage.port",
@@ -759,6 +765,7 @@ fn convert(
                 host: app.storage.host.clone().expect("validated"),
                 port: app.storage.port.expect("validated"),
                 user: app.storage.user.clone().expect("validated"),
+                path: app.storage.path.clone().expect("validated"),
                 key_file: app.storage.key_file.clone(),
                 known_hosts: app.storage.known_hosts.clone(),
             },
@@ -1100,14 +1107,19 @@ level = 1
     }
 
     #[test]
-    fn sftp_requires_host_and_user() {
+    fn sftp_requires_host_user_and_path() {
         let contents = VALID.replace(
             "[application.storage]\nkind = \"local\"\npath = \"/var/backups/thornwa\"\n",
-            "[application.storage]\nkind = \"sftp\"\nhost = \"backup.example.com\"\n",
+            "[application.storage]\nkind = \"sftp\"\nhost = \"backup.example.com\"\nuser = \"backup\"\n",
         );
         let outcome = validate(parse_str(&contents).expect("parse"));
         assert!(!outcome.is_valid());
-        assert!(outcome.errors.iter().any(|e| e.path.contains("user")));
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.path.contains("storage.path"))
+        );
     }
 
     #[test]
