@@ -80,6 +80,10 @@ jobs:
           cp scripts/install.sh bundle/install.sh
           cp scripts/install.ps1 bundle/install.ps1
           cd bundle
+          # The artifacts land with their binary names; rename them to
+          # the installers' asset shape (version without the v).
+          mv vaultline "vaultline-${GITHUB_REF_NAME#v}-x86_64-unknown-linux-musl"
+          mv vaultline.exe "vaultline-${GITHUB_REF_NAME#v}-x86_64-pc-windows-msvc.exe"
           sha256sum vaultline-* > SHA256SUMS
           cat SHA256SUMS
       - name: Publish the release

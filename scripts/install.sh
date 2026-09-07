@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Vaultline installer (Linux x86_64, gnu libc — the tag-driven release
-# workflow also publishes the static musl build per ADR-V0-1).
+# Vaultline installer (Linux x86_64 — the published static musl build per
+# ADR-V0-1 runs on any libc).
 #
 # Downloads the release binary for the declared version, verifies its
 # SHA-256 against the published checksum file, and installs it to
@@ -16,7 +16,7 @@ set -eu
 VERSION="${1:-0.8.0}"
 BASE="${VAULTLINE_RELEASES_BASE:-https://github.com/bloopdex/vaultline/releases/download}"
 
-ASSET="vaultline-${VERSION}-x86_64-unknown-linux-gnu"
+ASSET="vaultline-${VERSION}-x86_64-unknown-linux-musl"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
