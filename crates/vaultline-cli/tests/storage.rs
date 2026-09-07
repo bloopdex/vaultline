@@ -183,7 +183,7 @@ fn sftp_storage_backs_up_over_ssh() {
         .with_exposed_port(22.tcp())
         // The image's default `bash` exits immediately without a TTY —
         // the container must stay up for the test to configure it.
-        .with_entrypoint("tail -f /dev/null")
+        .with_cmd(vec!["tail", "-f", "/dev/null"])
         .with_copy_to("/keys/authorized_keys", pubkey.clone().into_bytes());
     let node = image.start().expect("start the server container");
     let port = node.get_host_port_ipv4(22).expect("mapped port");
