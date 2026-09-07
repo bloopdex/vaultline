@@ -202,12 +202,12 @@ fn sftp_storage_backs_up_over_ssh() {
         "sh",
         "-c",
         "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null 2>&1 \
-         && useradd -m backup \
-         && mkdir -p /home/backup/.ssh /home/backup/uploads \
-         && cp /keys/authorized_keys /home/backup/.ssh/authorized_keys \
-         && chown -R backup:backup /home/backup \
-         && chmod 700 /home/backup/.ssh \
-         && chmod 600 /home/backup/.ssh/authorized_keys \
+         && useradd -m vaultline-backup \
+         && mkdir -p /home/vaultline-backup/.ssh /home/vaultline-backup/uploads \
+         && cp /keys/authorized_keys /home/vaultline-backup/.ssh/authorized_keys \
+         && chown -R vaultline-backup:vaultline-backup /home/vaultline-backup \
+         && chmod 700 /home/vaultline-backup/.ssh \
+         && chmod 600 /home/vaultline-backup/.ssh/authorized_keys \
          && ssh-keygen -A \
          && echo SERVER-CONFIGURED",
     ]);
@@ -281,7 +281,7 @@ fn sftp_storage_backs_up_over_ssh() {
             "exec",
             node.id(),
             "cat",
-            "/home/backup/.ssh/authorized_keys",
+            "/home/vaultline-backup/.ssh/authorized_keys",
         ])
         .output()
         .expect("docker exec");
@@ -308,10 +308,10 @@ paths = ["{uploads}"]
 kind = "sftp"
 host = "127.0.0.1"
 port = {port}
-user = "backup"
+user = "vaultline-backup"
 # The repository directory on the server (created in the setup step,
 # owned by the backup user).
-path = "/home/backup/uploads"
+path = "/home/vaultline-backup/uploads"
 password_env = "VAULTLINE_TEST_PASSWORD"
 [application.retention]
 keep_last = 14
@@ -347,7 +347,8 @@ level = 1
 
     // The repository genuinely lives on the sftp server: restic lists the
     // snapshot through the same sftp URL the product builds.
-    let repo_url = format!("sftp://backup@127.0.0.1:{port}//home/backup/uploads/thornwa");
+    let repo_url =
+        format!("sftp://vaultline-backup@127.0.0.1:{port}//home/vaultline-backup/uploads/thornwa");
     let ls = Command::new(restic_bin().expect("restic"))
         .args(["-r", &repo_url, "--json", "snapshots"])
         .env("RESTIC_PASSWORD", "test-password")
