@@ -340,7 +340,11 @@ fn postgresql_database_is_dumped_and_recorded() {
     let db_url = if cfg!(windows) {
         format!("postgresql://postgres:postgres@host.docker.internal:{port}/postgres")
     } else {
-        format!("postgresql://postgres:postgres@localhost:{port}/postgres")
+        // 127.0.0.1, never localhost: on the hosted runner localhost
+        // resolves to ::1 first (pg) and the mysql client maps the
+        // name to the unix socket — both miss the container's
+        // published TCP port (first-hosted-run finding).
+        format!("postgresql://postgres:postgres@127.0.0.1:{port}/postgres")
     };
     append_database(
         &fixture.config,

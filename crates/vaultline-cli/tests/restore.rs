@@ -598,7 +598,11 @@ restore_database = {{ database = "main", target_database = "test2" }}
     let db_url = if cfg!(windows) {
         format!("postgresql://postgres:postgres@host.docker.internal:{port}/postgres")
     } else {
-        format!("postgresql://postgres:postgres@localhost:{port}/postgres")
+        // 127.0.0.1, never localhost: on the hosted runner localhost
+        // resolves to ::1 first (pg) and the mysql client maps the
+        // name to the unix socket — both miss the container's
+        // published TCP port (first-hosted-run finding).
+        format!("postgresql://postgres:postgres@127.0.0.1:{port}/postgres")
     };
     let contents = format!(
         "{base}\n[[application.databases]]\nname = \"main\"\nkind = \"postgresql\"\nurl_env = \"TEST_DATABASE_URL\"\nconsistency = {{ logical = {{ format = \"custom\" }} }}\n",
@@ -742,7 +746,7 @@ restore_database = {{ database = "main", target_database = "test2" }}
     let db_url = if cfg!(windows) {
         format!("mysql://root@host.docker.internal:{port}/test")
     } else {
-        format!("mysql://root@localhost:{port}/test")
+        format!("mysql://root@127.0.0.1:{port}/test")
     };
     let contents = format!(
         "{base}\n[[application.databases]]\nname = \"main\"\nkind = \"mysql\"\nurl_env = \"TEST_DATABASE_URL\"\nconsistency = {{ logical = {{ format = \"sql\" }} }}\n",
