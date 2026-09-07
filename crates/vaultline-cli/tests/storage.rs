@@ -172,7 +172,6 @@ fn sftp_storage_backs_up_over_ssh() {
         return;
     }
 
-    // The sshd container: user `backup`, chrooted home, key auth. No
     // The server is a plain ubuntu container the test configures
     // itself — no image entrypoint magic. (The history that decided
     // this: the atmoz/sftp image failed the hosted runs three
