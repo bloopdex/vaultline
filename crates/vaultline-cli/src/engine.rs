@@ -261,17 +261,30 @@ impl Restic {
 
 /// Classify a restic failure by exit code + stderr message.
 ///
-/// Why messages matter (ADR-V0-2 amendment 2026-09-07): the exit-code
-/// tables differ between restic versions. Empirically verified on restic
-/// 0.19.1: a missing repository exits **10** ("repository does not exist"),
-/// a wrong password exits **12** ("wrong password or no key found"), and
-/// lock contention blocks until the lock frees rather than erroring. Older
-/// restic releases used 3 (missing repo), 10 (lock), 11 (wrong password),
-/// 12 (unknown command). The stderr messages are stable across both tables,
-/// so the classification is code + message, with unknown combinations
-/// treated as generic failures — never guessed.
+/// Why messages decide first (ADR-V0-2 amendment 2026-09-07, part 2):
+/// the exit-code tables differ between restic versions — empirically,
+/// across THREE generations now. restic 0.19.1: a missing repository
+/// exits 10 ("repository does not exist"), a wrong password exits 12
+/// ("wrong password or no key found"), lock contention blocks rather
+/// than erroring. The historical table: 3 (missing repo), 10 (lock),
+/// 11 (wrong password), 12 (unknown command). restic 0.16.4
+/// (ubuntu-latest's apt package — probed against a container,
+/// 2026-09-07): a wrong password exits **1**. The stderr messages are
+/// stable across all three tables, so a stable message is stronger
+/// evidence than a drifted code; unlisted codes with unlisted messages
+/// stay generic failures — never guessed.
 pub fn classify_failure(code: i32, stderr: &[u8]) -> ResticFailure {
     let text = String::from_utf8_lossy(stderr);
+    // The stable messages, across every recorded table.
+    if text.contains("wrong password or no key found") {
+        return ResticFailure::WrongPassword;
+    }
+    if text.contains("unknown command") {
+        return ResticFailure::UnknownCommand;
+    }
+    if text.contains("repository does not exist") {
+        return ResticFailure::RepoMissing;
+    }
     match code {
         // 3: historical "repository does not exist" (pre-0.19 restic).
         3 => ResticFailure::RepoMissing,
@@ -285,14 +298,9 @@ pub fn classify_failure(code: i32, stderr: &[u8]) -> ResticFailure {
             }
         }
         // 11: historical wrong-password; 12: restic 0.19.x wrong-password
-        // and the historical unknown-command. The message disambiguates.
-        11 | 12 => {
-            if text.contains("unknown command") {
-                ResticFailure::UnknownCommand
-            } else {
-                ResticFailure::WrongPassword
-            }
-        }
+        // and the historical unknown-command. The messages above already
+        // caught the disambiguating cases.
+        11 | 12 => ResticFailure::WrongPassword,
         130 => ResticFailure::Interrupted,
         _ => ResticFailure::Generic,
     }
@@ -429,6 +437,25 @@ mod tests {
         assert_eq!(
             classify_failure(12, b"Fatal: wrong password or no key found\n"),
             ResticFailure::WrongPassword
+        );
+    }
+
+    #[test]
+    fn restic_0164_wrong_password_is_classified_by_message() {
+        // restic 0.16.4 (ubuntu-latest's apt package — probed against a
+        // container, 2026-09-07) exits 1 with the same stable message
+        // the older tables used 11/12 for. The message decides.
+        assert_eq!(
+            classify_failure(1, b"Fatal: wrong password or no key found\n"),
+            ResticFailure::WrongPassword
+        );
+        assert_eq!(
+            classify_failure(1, b"Fatal: unknown command \"nope\"\n"),
+            ResticFailure::UnknownCommand
+        );
+        assert_eq!(
+            classify_failure(1, b"Fatal: repository does not exist\n"),
+            ResticFailure::RepoMissing
         );
     }
 

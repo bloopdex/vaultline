@@ -72,6 +72,15 @@ layer therefore classifies failures by **exit code + stderr message**, with
 unrecognized combinations treated as generic failures — never guessed. The
 classifier is unit-tested against both tables (engine.rs).
 
+**Part 2 (2026-09-07, the first hosted run):** a THIRD table surfaced —
+restic 0.16.4 (ubuntu-latest's apt package, the CI job's engine; probed
+against a container) exits **1** for a wrong password, with the same
+stable message the older tables used 11/12 for. The messages are stable
+across all three generations while the codes drift, so the classification
+became **message-first**: the stable messages decide before any code
+table, unlisted codes with unlisted messages stay generic — still never
+guessed. The classifier is unit-tested against all three tables.
+
 A second empirical finding from the same integration pass: probing a
 missing **s3 repository hangs** — restic retries a missing bucket
 indefinitely ("Stat(<config/>) returned error, retrying after …") instead
