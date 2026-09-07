@@ -3,59 +3,87 @@
 Each limitation in the four-part form: what is missing / why / what
 happens instead / what would remove it.
 
-## Backup execution does not exist
+## Databases are declared, not captured
 
-- **What is missing**: `vaultline` cannot create backups. The declared
-  command surface (backup, restore, verify, prune, doctor, status) exists
-  only as the model behind it.
-- **Why**: the foundation deliberately precedes execution — the model,
-  configuration, and diagnostics are the load-bearing decisions every
-  later capability consumes (the project's build order).
-- **What happens instead**: `init` and `validate` are fully implemented;
-  nothing pretends a backup ran.
-- **What would remove it**: the backup phase — restic orchestration
-  (ADR-002) behind the storage abstraction (ADR-004).
+- **What is missing**: `vaultline backup run` does not dump databases. A
+  declared `[[application.databases]]` entry is validated but its
+  consistency mechanism (pg_dump etc.) is not executed.
+- **Why**: a database dump must be proven against a live server — the
+  container-gated integration path (PostgreSQL testcontainers) is the
+  verification vehicle, and it is being built up deliberately.
+- **What happens instead**: the run warns on stderr and the snapshot
+  records "databases declared but not captured (names)" in its
+  configuration metadata; the database never appears in the snapshot's
+  reconstructs list. A snapshot never claims database coverage it does
+  not have.
+- **What would remove it**: the database-capture step with per-engine
+  consistency execution, proven against a real PostgreSQL instance.
 
-## Storage backends are declared, not connected
+## Volumes are declared, not captured
 
-- **What is missing**: no repository is ever opened; `kind = "local"`,
-  `"s3"`, and `"sftp"` are validated configurations only.
-- **Why**: restic's own backends carry the connectivity (ADR-004); wiring
-  them is part of backup execution.
-- **What happens instead**: the validator enforces each backend's required
-  fields, so a definition written today is executable-shaped tomorrow.
-- **What would remove it**: the backup phase's repository-open step.
+- **What is missing**: declared volumes (direct / sidecar / pause-first
+  capture semantics) are validated but not captured.
+- **Why**: the capture-semantics decision (read-only mount vs sidecar
+  reader vs pause-first) is an experiment against real Docker volumes;
+  the direct-semantics path is next.
+- **What happens instead**: the run warns and records the volumes as
+  declared-but-not-captured, exactly like databases.
+- **What would remove it**: the volume-capture step (direct semantics
+  first).
 
-## Verification, scheduling, and app checks are recorded, not executed
+## SFTP key_file / known_hosts are not wired
 
-- **What is missing**: `verification.schedule` and `verification.app_checks`
-  are accepted, validated, and reported as warnings — nothing runs on the
-  schedule, and no app-semantic check executes.
-- **Why**: a schedule that silently does nothing would be worse than a
-  warning; execution needs the backup and restore phases first.
-- **What happens instead**: `validate` warns explicitly that these fields
-  are recorded but not yet executed.
-- **What would remove it**: the verification phase (levels L2–L6) and the
-  scheduling integration (systemd timer).
+- **What is missing**: an sftp storage target works with ssh-agent and
+  `~/.ssh/config`, but the `key_file` and `known_hosts` fields are
+  rejected with an explicit error.
+- **Why**: restic's mechanism for custom SSH commands (`-o
+  sftp.command`) executes a string through a shell — that conflicts with
+  the argv-only discipline (ADR-002). Wiring it safely needs a
+  documented, injection-free approach.
+- **What happens instead**: the validator accepts the fields; `backup
+  run` refuses with a clear "not wired yet" error rather than building a
+  shell string.
+- **What would remove it**: an injection-free custom-SSH mechanism or
+  restic gaining first-class key-file flags.
 
-## No local state
+## S3/SFTP targets are declared and URL-mapped, not yet integration-tested
 
-- **What is missing**: nothing is remembered between runs — no snapshot
-  records, no verification history, no lockfile.
-- **Why**: the state model was decided in ADR-003 (plain files first,
-  embedded SQLite only on evidence) and state has no producer yet.
-- **What happens instead**: each invocation is stateless; `BackupSnapshot`
-  is a serializable type with no persistence.
-- **What would remove it**: the backup phase, which writes the state file
-  the type was pinned for.
+- **What is missing**: repository URL construction for s3 and sftp is
+  implemented and unit-tested; no integration test has run against a
+  real S3-compatible store or SFTP server.
+- **Why**: those tests are container-gated (MinIO, SFTP server) and the
+  container harness is being proven up.
+- **What happens instead**: local storage is the fully integration-tested
+  path; s3/sftp failures surface through restic's own error channel.
+- **What would remove it**: MinIO and SFTP testcontainers in the
+  container harness.
 
-## The restore procedure is declared, not executable
+## Verification beyond L2 is not executed
 
-- **What is missing**: `application.restore.steps` is validated
-  (references must resolve) but nothing executes the steps.
-- **Why**: restore-first design means the disaster-recovery end-to-end
-  test (L6) is the defining test — it requires backups to exist first.
-- **What happens instead**: definitions carry the procedure so that every
-  future backup inherits it.
-- **What would remove it**: the restore phase, built against the
-  disaster scenario the project is defined by.
+- **What is missing**: the verification policy's schedule and app checks
+  are recorded but not executed, and levels L3–L6 (metadata verification,
+  file restore rehearsal, database restore rehearsal, the full recovery
+  test) have no executor.
+- **Why**: L4–L6 require restore machinery; scheduling requires the
+  operations phase. L1–L2 run inline on every backup whose policy
+  demands them.
+- **What happens instead**: every backup records the level actually
+  reached (L1 or L2) in the snapshot's integrity record — the
+  created-vs-proven-restorable distinction is preserved honestly.
+- **What would remove it**: the restore & verification phase (L3–L6) and
+  the scheduling integration.
+
+## Retention, prune, and restore are declared, not executed
+
+- **What is missing**: the retention policy is validated but no `prune`
+  command exists; the restore procedure is validated (references must
+  resolve) but no `restore` command executes it.
+- **Why**: retention explainability and restore-first design are
+  downstream of the backup path, which this phase established; prune and
+  restore are the operations and restore phases.
+- **What happens instead**: nothing deletes snapshots (the safe default),
+  and every snapshot carries its restore metadata so future restores
+  inherit it.
+- **What would remove it**: the `prune` command with per-snapshot
+  retention explanations, and the `restore` command executing the
+  procedure (restore-to-sandbox first).

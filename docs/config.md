@@ -52,7 +52,8 @@ password_env = "RESTIC_PASSWORD_THORNWA"   # never a literal
 
 # s3 fields:  endpoint, bucket, region (optional),
 #             access_key_env, secret_key_env
-# sftp fields: host, port, user, key_file (optional), known_hosts (optional)
+# sftp fields: host, port, user, path (remote directory),
+#              key_file (optional), known_hosts (optional)
 
 # --- retention ---------------------------------------------------------
 [application.retention]
@@ -94,7 +95,8 @@ with an alphanumeric (`thornwa`, `thorn-wa2`; not `Thornwa`, `-thornwa`,
   `path` (and rejects `url_env`); SQLite rejects `format = "custom"`
 - storage: `password_env` required for every kind; per-kind required
   fields (local: `path`; s3: `endpoint`, `bucket`, `access_key_env`,
-  `secret_key_env`; sftp: `host`, `user`, `port` 1–65535)
+  `secret_key_env`; sftp: `host`, `user`, `path` (the remote repository
+  directory), `port` 1–65535)
 - retention: at least one keep count non-zero (an all-zero policy would
   delete everything on the first prune)
 - verification level 1–6

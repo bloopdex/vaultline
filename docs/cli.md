@@ -3,8 +3,10 @@
 ## Commands
 
 ```
-vaultline init     write a commented vaultline.toml template
-vaultline validate check a vaultline.toml and report every problem
+vaultline init          write a commented vaultline.toml template
+vaultline validate      check a vaultline.toml and report every problem
+vaultline backup run    execute the recovery definition (restic, local/s3/sftp)
+vaultline backup list   list the snapshots recorded for this application
 vaultline --version
 ```
 
@@ -52,10 +54,49 @@ The `--json` payload:
 Invalid configurations carry `"valid": false` and an `errors` array of
 `{ "path", "message" }` objects; the exit code is still 2.
 
+### `vaultline backup run`
+
+```
+vaultline backup run [--config <path>] [--json]
+```
+
+Executes the definition: runs each file source's quiesce rule (if
+declared), stages git mirror sources, records config references (never
+copies them), initializes the repository on first use, runs the restic
+backup, and — when the verification policy demands L2 or higher — runs the
+repository integrity check inline. The resulting snapshot (engine
+reference, verification level actually reached, what it can reconstruct)
+is recorded in the state file and reported on stdout (`--json` for the
+machine payload).
+
+Sources declared but not captured yet (databases, volumes) are warned on
+stderr and recorded in the snapshot's configuration metadata — a snapshot
+never claims coverage it does not have.
+
+The state directory is `VAULTLINE_STATE_DIR`, else the platform data
+directory (`~/.local/state/vaultline` on Linux). A lockfile refuses
+concurrent runs (see `vaultline backup list`'s state below).
+
+### `vaultline backup list`
+
+```
+vaultline backup list [--config <path>] [--json]
+```
+
+Lists the snapshots recorded for the application: id, timestamp, highest
+verification level reached, and what each snapshot can reconstruct.
+
 ## Global flags
 
 - `--log-format json|pretty` (default `json`, also `VAULTLINE_LOG_FORMAT`)
 - `-h/--help`, `-V/--version`
+
+## Engine requirements
+
+`backup run` invokes the restic binary. It is located via
+`VAULTLINE_RESTIC_BIN`, else `restic` on PATH. The repository password is
+read from the environment variable named in the configuration
+(`application.storage.password_env`) — never from the file.
 
 ## Exit codes
 

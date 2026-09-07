@@ -16,20 +16,24 @@ degrading*.
 
 ## Named metrics
 
-The metric set is designed now and emits once backup operations exist
-(emitting numbers for operations that do not run would be fiction). The
-names are part of the machine contract from day one:
+One structured stderr event per metric (target `vaultline.metrics`).
+Emitted today, by `backup run`:
 
 | Metric | Meaning |
 |---|---|
-| `backups_run` | backup commands completed successfully |
-| `backups_failed` | backup commands that failed |
-| `backup_duration_ms` | wall time of a backup run |
-| `verification_level_reached` | highest level actually reached for a snapshot |
+| `backups_run` | 1 on a successful backup run |
+| `backups_failed` | 1 on a failed backup run |
+| `backup_duration_ms` | wall time of a backup run (quiesce + staging + restic + check) |
+| `verification_level_reached` | highest level actually reached for the snapshot |
+| `backup_files_new` | files newly added to the repository (from restic's summary) |
+| `backup_bytes_processed` | bytes processed (from restic's summary) |
+
+Designed for the phases that produce them (names stable, not yet
+emitted):
+
+| Metric | Meaning |
+|---|---|
 | `restore_rehearsals_run` | restore-rehearsal runs completed |
 | `restore_rehearsal_failures` | rehearsals that did not prove restorability |
 | `restore_duration_ms` | wall time of a restore/rehearsal |
 | `prune_kept` / `prune_deleted` | snapshots retained / deleted by a prune, with the per-snapshot reason recorded in the log |
-
-Delivery mechanism (structured stderr events vs a metrics endpoint) is
-decided with the backup phase; the names are stable.

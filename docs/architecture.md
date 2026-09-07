@@ -54,10 +54,27 @@ in docs/observability.md and emit once backup operations exist.
 None. Sequential processing is the design default; parallelism is added
 only when measurement demonstrates a need.
 
-## The engine boundary (declared, not yet built)
+## The engine boundary (implemented)
 
-When backup execution lands: restic as a subprocess (argv only, never
-shell interpolation), `--json` output parsed tolerantly, the documented
-exit-code contract mapped to typed outcomes (ADR-002). The storage
-adapter delegates to restic's own backends (ADR-004). All of it sits in
-the CLI layer, behind interfaces the model does not see.
+`vaultline-cli::engine` is the restic adapter (ADR-002): a subprocess
+with argv-only arguments (never shell interpolation), the repository
+password as an environment variable (never argv), `--json` output parsed
+tolerantly, and failures classified by exit code + stderr message — the
+amendment in ADR-002 records why (the exit-code tables differ between
+restic versions; the messages are stable). The storage adapter builds
+restic repository URLs for local / s3 / sftp targets (ADR-004) and
+forwards credential environment variables; connectivity is carried by
+restic's own backends.
+
+`vaultline-cli::backup` is the orchestration: quiesce rules, git mirror
+staging, config-reference recording (never copied), repository
+initialization on first use, the backup, the inline L2 integrity check,
+and the `BackupSnapshot` record persisted through
+`vaultline-core::state` (atomic writes + a create-new lockfile).
+
+## State
+
+Plain files, per ADR-003: `state.json` (schema version 1) records
+snapshots per application; a `lock` file (create-new semantics) refuses
+concurrent runs. Embedded SQLite remains off the table until evidence
+demands it.

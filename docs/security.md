@@ -11,9 +11,9 @@ threat → boundary → defense → status.
 - **Defense**: reuse restic's audited cryptography — content-defined
   chunking, authenticated encryption, integrity-checked metadata.
   Vaultline never invents cryptography.
-- **Status**: the model declares the repository-password environment
-  variable; execution (and thus the encryption itself) arrives with backup
-  execution.
+- **Status**: active — every repository initialized by `backup run` is a
+  restic repository with its own password; wrong passwords surface as
+  configuration errors, never fallbacks.
 
 ## Key and credential management
 
@@ -44,9 +44,10 @@ threat → boundary → defense → status.
 - **Boundary**: every restic invocation.
 - **Defense**: argv arrays only — no shell interpolation, ever
   (ADR-002). Paths and values travel as arguments, not as strings to be
-  parsed.
-- **Status**: the discipline is recorded and will be test-enforced with
-  the orchestration layer.
+  parsed. This is why the sftp `key_file` shortcut is refused: restic's
+  mechanism for it would reintroduce shell parsing.
+- **Status**: enforced in the engine layer; integration-tested end to
+  end (paths with spaces and odd characters are valid arguments).
 
 ## Secrets in logs and manifests
 
@@ -55,10 +56,10 @@ threat → boundary → defense → status.
 - **Boundary**: the logging and manifest-writing code.
 - **Defense**: the redaction contract — manifests carry shapes and names,
   never values; structured logging carries field paths and counts, never
-  environment contents.
-- **Status**: the manifest types enforce it structurally (no field for
-  values exists); log hygiene is test-enforced once orchestration emits
-  events.
+  environment contents. Config references (`.env` files) are recorded as
+  pointers and are structurally excluded from the backup path list.
+- **Status**: enforced — an integration test proves the secret file's
+  content never enters the repository.
 
 ## Corrupted backups
 

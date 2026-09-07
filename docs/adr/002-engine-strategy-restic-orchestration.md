@@ -56,3 +56,18 @@ Engineering discipline for the orchestration layer:
 - If a verification capability restic lacks (e.g. sampling-verified restore
   rehearsal) becomes a hard requirement, re-open the engine question with
   that requirement on the table.
+
+## Amendment 2026-09-07 — failure classification is exit code + message
+
+The original decision recorded restic's documented exit-code table
+(0/1/3/10/11/12/130). First-run integration testing against restic 0.19.1
+found the table inaccurate: a missing repository exits **10** (not 3), a
+wrong password exits **12** (not 11), and lock contention blocks until the
+lock frees rather than erroring. Older restic releases follow the published
+table (3 missing / 10 lock / 11 wrong password / 12 unknown command).
+
+The stderr messages ("repository does not exist", "wrong password or no key
+found", "unknown command") are stable across both tables. The orchestration
+layer therefore classifies failures by **exit code + stderr message**, with
+unrecognized combinations treated as generic failures — never guessed. The
+classifier is unit-tested against both tables (engine.rs).

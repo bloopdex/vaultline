@@ -42,20 +42,27 @@ defining end-to-end test.
 
 ## What it does today
 
-The foundation is implemented and verified:
-
 - `vaultline init` — write a commented, valid configuration template
   (safe by default: never overwrites an existing file)
 - `vaultline validate` — strict configuration checking: unknown fields are
   rejected, and **every** validation failure is reported at once
+- `vaultline backup run` — execute the definition against restic: quiesce
+  rules, git mirror staging, config references recorded but never copied,
+  repository initialization on first use, the backup, and the inline L2
+  integrity check when the policy demands it; the snapshot (engine
+  reference, verification level actually reached, what it can
+  reconstruct) is recorded in the state file
+- `vaultline backup list` — the recorded snapshots per application
 - the canonical recovery model (ADR-003), typed TOML configuration
-  (ADR-004), the error model with documented exit codes, structured logging
+  (ADR-004), the error model with documented exit codes, structured
+  logging, named metrics
 - supply-chain verification from day one: cargo-vet (with public audit-store
   imports and certified direct dependencies) and cargo-deny
 
-Backup, restore, verify, prune, doctor, and status execution are declared in
-the model but not yet implemented — see [docs/limitations.md](docs/limitations.md)
-for exactly what is missing and what would remove each limitation.
+Database and volume capture, restore, prune, and verification beyond L2
+are declared in the model but not yet executed — see
+[docs/limitations.md](docs/limitations.md) for exactly what is missing and
+what would remove each limitation.
 
 ## Quick start
 
@@ -67,6 +74,10 @@ cargo build --release
 
 # fill in your application's paths, then check it
 ./target/release/vaultline validate
+
+# back it up (restic on PATH, password in the referenced env var)
+RESTIC_PASSWORD_MY_APP=... ./target/release/vaultline backup run
+./target/release/vaultline backup list
 ```
 
 Exit codes: `0` success · `1` operational failure · `2` usage/config error.
