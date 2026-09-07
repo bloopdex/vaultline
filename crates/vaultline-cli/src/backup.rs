@@ -130,8 +130,15 @@ pub fn repo_url(app: &Application) -> Result<String> {
             path,
             ..
         } => Ok(format!(
-            "sftp:{user}@{host}:{port}:{}/{}",
-            path.trim_end_matches('/'),
+            // The URI form is the ONLY restic sftp shape that carries a
+            // port: the bare `sftp:user@host:path` form treats the
+            // first colon as the path separator, so an embedded port
+            // silently becomes part of the directory and ssh connects
+            // to port 22 (verified against restic 0.16.4's config
+            // parser — the first hosted SFTP run surfaced the bug the
+            // agent-gated test had never executed).
+            "sftp://{user}@{host}:{port}//{}/{}",
+            path.trim_matches('/'),
             repo
         )),
     }
@@ -877,7 +884,9 @@ mod tests {
         });
         assert_eq!(
             repo_url(&app).expect("url"),
-            "sftp:backup@backup.example.com:2222:/srv/backups/thornwa"
+            // The URI form: the bare sftp: form would swallow the port
+            // into the directory (restic's parser — recorded).
+            "sftp://backup@backup.example.com:2222//srv/backups/thornwa"
         );
     }
 

@@ -264,7 +264,7 @@ level = 1
 
     // The repository genuinely lives on the sftp server: restic lists the
     // snapshot through the same sftp URL the product builds.
-    let repo_url = format!("sftp:backup@127.0.0.1:{port}://thornwa");
+    let repo_url = format!("sftp://backup@127.0.0.1:{port}//thornwa");
     let ls = Command::new(restic_bin().expect("restic"))
         .args(["-r", &repo_url, "--json", "snapshots"])
         .env("RESTIC_PASSWORD", "test-password")
