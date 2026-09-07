@@ -188,15 +188,29 @@ fn sftp_storage_backs_up_over_ssh() {
     let node = image.start().expect("start sftp server");
     let port = node.get_host_port_ipv4(22).expect("mapped port");
 
-    // Readiness: poll the published port until sshd accepts connections
-    // (the host keys exist by then — keygen precedes sshd).
+    // Readiness: poll for the generated host key (keygen precedes sshd
+    // in the image's entrypoint). A TCP poll is NOT enough: the
+    // runner's docker port mapping accepts connections through its
+    // proxy before the container's sshd exists (the second hosted run
+    // broke on exactly that — connect succeeded, the key was not there
+    // yet).
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     loop {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        let ready = Command::new("docker")
+            .args([
+                "exec",
+                node.id(),
+                "sh",
+                "-c",
+                "test -f /etc/ssh/ssh_host_ed25519_key.pub",
+            ])
+            .status()
+            .is_ok_and(|status| status.success());
+        if ready {
             break;
         }
         if std::time::Instant::now() > deadline {
-            panic!("the sftp container never accepted connections on port {port}");
+            panic!("the sftp container never generated its host keys");
         }
         std::thread::sleep(std::time::Duration::from_millis(1000));
     }
