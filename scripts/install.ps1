@@ -8,22 +8,15 @@
 #   powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts/install.ps1 -Version 0.8.0
 #
-# The release base defaults to a placeholder: the repository is not
-# hosted yet (the hosting decision is recorded open). Pass -ReleaseBase
-# pointing at the published release download root once it is — the
-# script stays valid until the placeholder is replaced.
+# The release base is the repository's published release downloads;
+# -ReleaseBase overrides it (mirrors, self-hosted proxies).
 param(
     [string]$Version = "0.8.0",
-    [string]$ReleaseBase = "https://PLACEHOLDER-UNTIL-THE-REPOSITORY-IS-HOSTED/releases/download"
+    [string]$ReleaseBase = "https://github.com/bloopdex/vaultline/releases/download"
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
-
-if ($ReleaseBase -like "*PLACEHOLDER*") {
-    Write-Error "the release base is not published yet (the repository is not hosted); pass -ReleaseBase pointing at the published releases"
-    exit 1
-}
 
 $asset = "vaultline-$Version-x86_64-pc-windows-msvc.exe"
 $urlBase = "$ReleaseBase/v$Version"

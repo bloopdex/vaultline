@@ -9,21 +9,12 @@
 # Usage:
 #   sh scripts/install.sh [VERSION]
 #
-# The release base defaults to a placeholder: the repository is not
-# hosted yet (the hosting decision is recorded open). Set
-# VAULTLINE_RELEASES_BASE to the published release download root once
-# it is — the scripts stay valid until the placeholder is replaced.
+# The release base is the repository's published release downloads;
+# VAULTLINE_RELEASES_BASE overrides it (mirrors, self-hosted proxies).
 set -eu
 
 VERSION="${1:-0.8.0}"
-BASE="${VAULTLINE_RELEASES_BASE:-https://PLACEHOLDER-UNTIL-THE-REPOSITORY-IS-HOSTED/releases/download}"
-
-case "$BASE" in
-    *PLACEHOLDER*)
-        echo "error: the release base is not published yet (the repository is not hosted); set VAULTLINE_RELEASES_BASE" >&2
-        exit 1
-        ;;
-esac
+BASE="${VAULTLINE_RELEASES_BASE:-https://github.com/bloopdex/vaultline/releases/download}"
 
 ASSET="vaultline-${VERSION}-x86_64-unknown-linux-gnu"
 TMP="$(mktemp -d)"
