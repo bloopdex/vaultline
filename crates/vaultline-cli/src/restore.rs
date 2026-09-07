@@ -292,6 +292,9 @@ pub fn copy_tree_into(src: &Path, dst: &Path) -> Result<u64> {
 fn create_symlink(target: &Path, link: &Path, is_dir: bool) -> std::io::Result<()> {
     #[cfg(unix)]
     {
+        // Unix symlinks carry no file/directory distinction — the
+        // parameter exists for the Windows arm's contract.
+        let _ = is_dir;
         std::os::unix::fs::symlink(target, link)
     }
     #[cfg(windows)]
