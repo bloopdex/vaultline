@@ -2,10 +2,13 @@
 #   build-test: the code gates (fmt / clippy / test) on ubuntu + windows
 #   verify:     the supply-chain gates (cargo vet / cargo deny) + workflow
 #               self-validation, ubuntu only
-# The container harness tests (tests/containers.rs) are #[ignore]d and never
-# run here: they require a Docker engine and arrive with the database-backup
-# phase. Hosted execution begins when the repository is hosted (the workflow
-# is validated locally by scripts/check-workflows.py).
+# The container-harness test (tests/containers.rs) is #[ignore]d and never
+# runs here — it is the harness's own existence proof, run manually. The
+# container-gated integration suites (PostgreSQL/MySQL/MariaDB round trips,
+# MinIO, the sidecar/pause-first volume proofs, the SFTP and named-volume
+# proofs) run on the ubuntu job where Docker, the database clients, and the
+# OpenSSH client are present; suites skip gracefully when a requirement is
+# absent (docs/testing.md).
 #
 # Trigger map: pushes to master and v* tags run the full gates; pull requests
 # run the same gates pre-merge.
