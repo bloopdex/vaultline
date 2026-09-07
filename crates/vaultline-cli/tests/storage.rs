@@ -209,6 +209,7 @@ fn sftp_storage_backs_up_over_ssh() {
          && chmod 700 /home/vaultline-backup/.ssh \
          && chmod 600 /home/vaultline-backup/.ssh/authorized_keys \
          && ssh-keygen -A \
+         && mkdir -p /run/sshd \
          && echo SERVER-CONFIGURED",
     ]);
     assert!(
