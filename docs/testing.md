@@ -7,18 +7,21 @@ Tests are part of implementation: a feature without tests is not done.
 | Layer | Where | What it pins |
 |---|---|---|
 | unit | `vaultline-core` (`#[cfg(test)]` modules) | the model's serialization contracts (application + snapshot JSON round-trips, RFC 3339 timestamps, level ordering); every validation rule (name rules, duplicates, dangling restore references, per-kind storage fields, retention sanity); the exit-code contract; state-file round-trips, version refusal, corrupt-state refusal, lock exclusivity |
-| unit | `vaultline-cli` (engine + backup modules) | the failure classifier against **both** restic exit-code tables (the ADR-002 amendment), tolerant `--json` summary extraction (garbage tolerated, missing summary = failure), repository URL builders for all three storage kinds, sftp key-file deferral, password-env diagnostics |
+| unit | `vaultline-cli` (engine + backup + database modules) | the failure classifier against **both** restic exit-code tables (the ADR-002 amendment), tolerant `--json` summary extraction (garbage tolerated, missing summary = failure), repository URL builders for all three storage kinds, sftp key-file deferral, password-env diagnostics, connection-string parsing (URI + key=value) with sanitization that never leaks passwords into argv, the pgpass file format |
 | template | `vaultline-cli` (template tests) | the `init` template validates for any legal name, warning-free |
 | integration | `vaultline-cli/tests/cli.rs` | the real binary against real files: `init` writes and refuses to overwrite, `validate` exit codes and output, `--json` payloads, `--version` |
 | engine integration | `vaultline-cli/tests/backup.rs` | the real binary + **the real restic binary**: end-to-end backup (init-if-needed, files + excludes, quiesce, git mirror, config-ref exclusion proven by repository listing), state recording, `backup list`, `--json` payload, wrong-password mapping, missing-restic diagnostics, lock refusal |
-| container | `vaultline-cli/tests/containers.rs` | the harness later phases build database/SFTP/MinIO integration on |
+| database integration | `vaultline-cli/tests/databases.rs` | **SQLite end-to-end without containers** (dump captured via the backup API, recorded metadata, restore-side `integrity_check` + row counts on the restored copy — the L5-lite proof); **PostgreSQL end-to-end** (testcontainers PostgreSQL + real pg_dump — on Windows through a container shim, on Unix from PATH; the dump is proven to be a valid `-Fc` archive by its PGDMP signature); **MinIO S3 end-to-end** (testcontainers MinIO + restic's s3 backend listing the bucket); volume direct capture (host path); the sidecar honesty contract |
+| container | `vaultline-cli/tests/containers.rs` | the harness itself: a PostgreSQL container comes up and accepts connections |
 
-## The engine integration gate
+## The integration gates
 
-`tests/backup.rs` runs only when restic is available: `VAULTLINE_RESTIC_BIN`
-overrides the binary path, else `restic` on PATH; otherwise the tests skip
-with a note. CI installs restic on the ubuntu job; the Windows job skips
-the engine suite. Locally:
+`tests/backup.rs` and `tests/databases.rs` skip with a note when a
+requirement is absent: restic (`VAULTLINE_RESTIC_BIN` or PATH), sqlite3
+(`VAULTLINE_SQLITE3` or PATH), pg_dump (`VAULTLINE_PGDUMP` or PATH), or a
+running Docker engine. CI installs restic, sqlite3, and postgresql-client
+on the ubuntu job (Docker is present on the runner, so the container-gated
+tests run hosted); the Windows job skips whatever is missing. Locally:
 
 ```sh
 VAULTLINE_RESTIC_BIN=A:\BloopLab\tools\restic.exe cargo test --workspace

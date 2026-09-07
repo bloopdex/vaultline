@@ -23,8 +23,14 @@ threat → boundary → defense → status.
 - **Defense**: credentials are environment-variable *names* in
   `vaultline.toml`, never literals; the validator enforces it. Config
   references (`.env` files) are recorded in manifests as pointers, never
-  copied into backups.
-- **Status**: enforced at configuration time today.
+  copied into backups. Database credentials never reach argv: PostgreSQL
+  dumps authenticate through a temporary PGPASSFILE (0600 on Unix,
+  removed after the dump); MySQL/MariaDB through the `MYSQL_PWD`
+  environment variable; the connection string passed to `pg_dump` is
+  sanitized (password stripped) by a unit-tested parser.
+- **Status**: enforced — connection-string sanitization and the pgpass
+  format are unit-tested; the capture integration tests run against real
+  servers.
 
 ## Malicious backup archives on restore
 

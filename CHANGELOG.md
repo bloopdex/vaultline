@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.0 — 2026-09-07
+
+Database capture and storage backends:
+
+- **Per-engine database dumps** (ADR-V0-3 consistency mechanisms):
+  PostgreSQL via `pg_dump -Fc` with the connection string sanitized on
+  argv and authentication through a temporary PGPASSFILE; MySQL/MariaDB
+  via `mysqldump --single-transaction --routines --triggers --events`
+  with the password in `MYSQL_PWD`; SQLite via the CLI's `.backup`
+  (Online Backup API — never `cp` of a WAL-mode database). Dumps stage
+  into the same restic run; snapshot `database_metadata` records engine,
+  mechanism, and format; a failed dump aborts the backup.
+- **Volume direct capture**: host paths captured as-is; Docker volume
+  names resolved via `docker volume inspect`; sidecar/pause-first stay
+  declared-but-not-captured (recorded honestly).
+- **Integration proof**: SQLite end-to-end including the restore-side
+  check (integrity_check + row counts on the restored dump); PostgreSQL
+  end-to-end against a testcontainers server (the dump proven a valid
+  `-Fc` archive); S3-compatible end-to-end into MinIO; the Phase 1
+  container harness is now proven (its ignored test runs green).
+- Tool requirements documented (cli.md): restic/pg_dump/mysqldump/
+  sqlite3 on PATH with `VAULTLINE_*` overrides; CI installs them on the
+  ubuntu job.
+- Docs updated to the implemented state; limitations narrowed to what
+  remains unproven or deferred.
+
 ## 0.2.0 — 2026-09-07
 
 Backup execution — the engine boundary is real:

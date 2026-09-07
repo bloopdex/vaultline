@@ -39,11 +39,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      # The engine integration tests need a real restic binary; on Windows
-      # they skip gracefully when it is absent (docs/testing.md).
-      - name: Install restic (ubuntu)
+      # The integration tests need real binaries: restic (engine), sqlite3
+      # (SQLite capture), pg_dump (PostgreSQL capture; the container itself
+      # comes from testcontainers on the runner's Docker). On Windows the
+      # tests skip gracefully when a tool is absent (docs/testing.md).
+      - name: Install test tools (ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y restic
+        run: sudo apt-get update && sudo apt-get install -y restic sqlite3 postgresql-client
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (warnings denied)

@@ -48,19 +48,25 @@ defining end-to-end test.
   rejected, and **every** validation failure is reported at once
 - `vaultline backup run` — execute the definition against restic: quiesce
   rules, git mirror staging, config references recorded but never copied,
-  repository initialization on first use, the backup, and the inline L2
-  integrity check when the policy demands it; the snapshot (engine
-  reference, verification level actually reached, what it can
-  reconstruct) is recorded in the state file
+  **per-engine database dumps** (PostgreSQL `pg_dump -Fc`, MySQL/MariaDB
+  `mysqldump`, SQLite via the Online Backup API — credentials never in
+  argv), volume capture (direct semantics), repository initialization on
+  first use, the backup, and the inline L2 integrity check when the
+  policy demands it; the snapshot (engine reference, database metadata,
+  verification level actually reached, what it can reconstruct) is
+  recorded in the state file
 - `vaultline backup list` — the recorded snapshots per application
+- storage backends: local (fully integration-tested), S3-compatible
+  (proven against MinIO), SFTP (URL-mapped; agent/ssh-config auth)
 - the canonical recovery model (ADR-003), typed TOML configuration
   (ADR-004), the error model with documented exit codes, structured
   logging, named metrics
 - supply-chain verification from day one: cargo-vet (with public audit-store
   imports and certified direct dependencies) and cargo-deny
 
-Database and volume capture, restore, prune, and verification beyond L2
-are declared in the model but not yet executed — see
+MySQL/MariaDB capture is implemented but not yet integration-proven;
+volume sidecar/pause-first semantics, restore, prune, and verification
+beyond L2 are declared but not executed — see
 [docs/limitations.md](docs/limitations.md) for exactly what is missing and
 what would remove each limitation.
 

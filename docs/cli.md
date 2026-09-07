@@ -91,12 +91,24 @@ verification level reached, and what each snapshot can reconstruct.
 - `--log-format json|pretty` (default `json`, also `VAULTLINE_LOG_FORMAT`)
 - `-h/--help`, `-V/--version`
 
-## Engine requirements
+## Engine and tool requirements
 
-`backup run` invokes the restic binary. It is located via
-`VAULTLINE_RESTIC_BIN`, else `restic` on PATH. The repository password is
-read from the environment variable named in the configuration
-(`application.storage.password_env`) — never from the file.
+`backup run` invokes external tools, each located via an environment
+override or PATH:
+
+| Tool | Override | Used for |
+|---|---|---|
+| restic | `VAULTLINE_RESTIC_BIN` | the backup engine (ADR-002) |
+| pg_dump | `VAULTLINE_PGDUMP` | PostgreSQL custom-format dumps |
+| mysqldump | `VAULTLINE_MYSQLDUMP` | MySQL/MariaDB dumps |
+| sqlite3 | `VAULTLINE_SQLITE3` | SQLite backups (the Online Backup API) |
+| docker | — | docker-volume mountpoint resolution |
+
+The repository password is read from the environment variable named in
+the configuration (`application.storage.password_env`), the database
+password from the database's connection environment variable — never
+from the file, and never on a command line (PostgreSQL authentication
+travels through a temporary PGPASSFILE; MySQL through `MYSQL_PWD`).
 
 ## Exit codes
 

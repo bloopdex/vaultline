@@ -71,3 +71,11 @@ found", "unknown command") are stable across both tables. The orchestration
 layer therefore classifies failures by **exit code + stderr message**, with
 unrecognized combinations treated as generic failures — never guessed. The
 classifier is unit-tested against both tables (engine.rs).
+
+A second empirical finding from the same integration pass: probing a
+missing **s3 repository hangs** — restic retries a missing bucket
+indefinitely ("Stat(<config/>) returned error, retrying after …") instead
+of returning the missing-repository exit code. Repository setup is
+therefore **init-first**: `init` creates the repository (and the bucket)
+when absent, and fails with "already exists" when present — that message
+is treated as success. There is no probe step.

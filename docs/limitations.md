@@ -3,33 +3,43 @@
 Each limitation in the four-part form: what is missing / why / what
 happens instead / what would remove it.
 
-## Databases are declared, not captured
+## MySQL/MariaDB capture is implemented but not yet integration-proven
 
-- **What is missing**: `vaultline backup run` does not dump databases. A
-  declared `[[application.databases]]` entry is validated but its
-  consistency mechanism (pg_dump etc.) is not executed.
-- **Why**: a database dump must be proven against a live server — the
-  container-gated integration path (PostgreSQL testcontainers) is the
-  verification vehicle, and it is being built up deliberately.
-- **What happens instead**: the run warns on stderr and the snapshot
-  records "databases declared but not captured (names)" in its
-  configuration metadata; the database never appears in the snapshot's
-  reconstructs list. A snapshot never claims database coverage it does
-  not have.
-- **What would remove it**: the database-capture step with per-engine
-  consistency execution, proven against a real PostgreSQL instance.
+- **What is missing**: `mysqldump --single-transaction --routines
+  --triggers --events` capture is implemented (MYSQL_PWD environment
+  auth, argv never carries credentials) but has never run against a live
+  MySQL or MariaDB server — no integration test proves it.
+- **Why**: the verification vehicle (a MySQL testcontainer + a
+  mysqldump binary on the test host) has not been stood up; PostgreSQL
+  and SQLite were the phase's proven engines.
+- **What happens instead**: a missing/invalid connection fails with a
+  clear diagnostic; nothing pretends the mechanism is proven.
+- **What would remove it**: a MySQL/MariaDB testcontainer suite.
 
-## Volumes are declared, not captured
+## Volume sidecar / pause-first semantics are declared, not captured
 
-- **What is missing**: declared volumes (direct / sidecar / pause-first
-  capture semantics) are validated but not captured.
-- **Why**: the capture-semantics decision (read-only mount vs sidecar
-  reader vs pause-first) is an experiment against real Docker volumes;
-  the direct-semantics path is next.
-- **What happens instead**: the run warns and records the volumes as
-  declared-but-not-captured, exactly like databases.
-- **What would remove it**: the volume-capture step (direct semantics
-  first).
+- **What is missing**: volumes with `capture = "sidecar"` or
+  `"pause-first"` are validated but not captured.
+- **Why**: the semantics decision (read-only sidecar mount vs pause
+  first) is an experiment against real Docker volumes; the direct path
+  (host path or `docker volume inspect` mountpoint) is implemented and
+  proven for host paths.
+- **What happens instead**: the run warns and records such volumes as
+  declared-but-not-captured in the snapshot metadata — never silently
+  claimed.
+- **What would remove it**: the sidecar and pause-first executors.
+
+## Docker-volume direct capture is implemented but not yet proven
+
+- **What is missing**: `capture = "direct"` with a docker volume name
+  resolves the mountpoint via `docker volume inspect`, but no test has
+  captured a real named Docker volume (the inspect path works; the
+  cross-platform test needs a Docker-engine-specific fixture).
+- **Why**: host-path volumes are fully proven; named-volume proof needs
+  the volume to exist on the test host's engine.
+- **What happens instead**: resolution failures are explicit operational
+  errors naming the volume.
+- **What would remove it**: a named-volume integration test.
 
 ## SFTP key_file / known_hosts are not wired
 

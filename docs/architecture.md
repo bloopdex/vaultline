@@ -67,10 +67,21 @@ forwards credential environment variables; connectivity is carried by
 restic's own backends.
 
 `vaultline-cli::backup` is the orchestration: quiesce rules, git mirror
-staging, config-reference recording (never copied), repository
+staging, config-reference recording (never copied), per-engine database
+dumps into staging (below), volume path resolution, repository
 initialization on first use, the backup, the inline L2 integrity check,
 and the `BackupSnapshot` record persisted through
 `vaultline-core::state` (atomic writes + a create-new lockfile).
+
+`vaultline-cli::database` is the consistency layer (ADR-V0-3): each
+database is captured through its engine's own tooling into a staging
+dump that joins the same restic run — `pg_dump -Fc` (connection string
+sanitized on argv, authentication via a temporary PGPASSFILE),
+`mysqldump --single-transaction --routines --triggers --events`
+(password via `MYSQL_PWD`), and `sqlite3 .backup` (the Online Backup
+API — never `cp` of a WAL-mode database). A failed dump aborts the
+backup: a snapshot never claims database coverage a dump did not
+produce.
 
 ## State
 
