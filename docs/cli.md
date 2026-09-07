@@ -141,7 +141,7 @@ reference, integrity, reconstructs).
 ### `vaultline restore`
 
 ```
-vaultline restore <snapshot> [--config <path>] [--target DIR] [--dry-run] [--verify] [--json]
+vaultline restore <snapshot> [--config <path>] [--target DIR] [--dry-run] [--verify] [--json] [--path-map from=to]...
 ```
 
 Executes the definition's ordered restore procedure for the snapshot:
@@ -158,9 +158,17 @@ Executes the definition's ordered restore procedure for the snapshot:
    integrity_check on the restored database).
 
 The default target is `./vaultline-restore` — never the live paths
-unless the procedure declares them. `--dry-run` prints the plan and
-writes nothing. `--verify` also runs the definition's app checks
-against the target (same environment contract as L6).
+unless the procedure declares them. `--dry-run` prints the plan (with
+each mapped target shown explicitly) and writes nothing. `--verify`
+also runs the definition's app checks against the target (same
+environment contract as L6).
+
+Cross-platform restore (ADR-008): `--path-map from=to` (repeatable)
+merges after the configuration's own `path_map` entries; the longest
+matching prefix wins and later entries break ties, so the CLI
+overrides the configuration. The map translates declared production
+targets into this host's layout; unmapped targets follow the OS's own
+interpretation.
 
 ### App checks (ADR-006)
 
@@ -178,6 +186,16 @@ never a shell string. The environment contract: CWD is the rehearsal
 root (L6) or the restore target (`restore --verify`), and
 `VAULTLINE_REHEARSAL_DIR` names it. Exit 0 passes; anything else fails
 the verification with the stderr tail as the diagnosis.
+
+### `vaultline version`
+
+```
+vaultline version [--json]
+```
+
+The versioned surfaces: the binary version (single-sourced from the
+workspace), the state-file schema version, and the orchestrated engine
+(restic). `--json` is machine-readable; the human form is plain.
 
 ### `vaultline backup prune`
 

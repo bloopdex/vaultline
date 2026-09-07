@@ -63,6 +63,15 @@ pub enum Command {
     Status(crate::ops::StatusArgs),
     /// Generate or install the systemd service/timer units.
     Timer(crate::timer::TimerArgs),
+    /// Report the versioned surfaces (binary, state schema, engine).
+    Version(VersionArgs),
+}
+
+#[derive(clap::Args)]
+pub struct VersionArgs {
+    /// Machine-readable output on stdout.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(clap::Args)]
@@ -108,6 +117,29 @@ pub struct ValidateArgs {
     /// Machine-readable result on stdout (exit code unchanged).
     #[arg(long)]
     pub json: bool,
+}
+
+pub fn run_version(args: VersionArgs) -> Result<(), VaultlineError> {
+    // The versioned surfaces (the release-checklist contract): the
+    // binary version, the state-file schema version, and the engine
+    // the CLI orchestrates. `--json` is machine-readable; the human
+    // form stays plain for scripts.
+    if args.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "name": "vaultline",
+                "version": env!("CARGO_PKG_VERSION"),
+                "state_schema": vaultline_core::state::STATE_VERSION,
+                "engine": "restic",
+            })
+        );
+    } else {
+        println!("vaultline {}", env!("CARGO_PKG_VERSION"));
+        println!("state schema: v{}", vaultline_core::state::STATE_VERSION);
+        println!("backup engine: restic (orchestrated via its --json contract)");
+    }
+    Ok(())
 }
 
 pub fn run_init(args: InitArgs) -> Result<(), VaultlineError> {

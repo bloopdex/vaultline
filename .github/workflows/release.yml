@@ -1,0 +1,94 @@
+# The tag-driven release workflow — the publishing half of
+# docs/release/RELEASE-CHECKLIST.md. A push of a v* tag:
+#   1. verifies the tag matches the single-sourced workspace version,
+#   2. builds the release binary on both platforms (the static musl
+#      Linux build is ADR-V0-1's distribution story),
+#   3. smoke-tests each artifact (version + template round trip),
+#   4. assembles the bundle with SHA256SUMS and the installers and
+#      publishes the release through the gh CLI.
+# Hosted execution begins when the repository is hosted (the workflow
+# is validated locally by scripts/check-workflows.py). CI runs the
+# full gates on tags regardless.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build & smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: vaultline-${{ github.ref_name }}-x86_64-unknown-linux-musl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: vaultline-${{ github.ref_name }}-x86_64-pc-windows-msvc.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Verify the tag matches the workspace version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)"
+          if [ "$tag" != "$version" ]; then
+            echo "the tag ($tag) and the workspace version ($version) differ — bump Cargo.toml first"
+            exit 1
+          fi
+      - name: musl toolchain (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build (release)
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Smoke (version + template round trip)
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/vaultline"
+          if [ "${{ runner.os }}" = "Windows" ]; then bin="$bin.exe"; fi
+          "$bin" version
+          "$bin" init --config smoke.toml --name smoke-app
+          "$bin" validate --config smoke.toml
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: target/${{ matrix.target }}/release/vaultline*
+
+  release:
+    name: assemble & publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: bundle
+          merge-multiple: true
+      - name: Assemble the bundle (checksums + installers)
+        run: |
+          cp scripts/install.sh bundle/install.sh
+          cp scripts/install.ps1 bundle/install.ps1
+          cd bundle
+          sha256sum vaultline-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            bundle/SHA256SUMS \
+            bundle/vaultline-* \
+            bundle/install.sh \
+            bundle/install.ps1 \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"

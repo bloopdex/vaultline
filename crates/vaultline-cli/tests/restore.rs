@@ -233,6 +233,111 @@ fn restore_refuses_to_overwrite_existing_files() {
     );
 }
 
+/// Cross-platform restore (Phase 8): a declared production target in
+/// Unix shape translates through the configuration's path map into this
+/// host's layout, the dry-run plan shows the mapping explicitly, and
+/// the files land at the mapped location.
+#[test]
+fn cross_platform_restore_lands_at_the_mapped_target() {
+    if restic_bin().is_none() {
+        eprintln!("skipping: restic not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.backup();
+    let mapped_root = fixture._dir.path().join("mapped");
+    let extra = format!(
+        r#"
+[[application.restore.steps]]
+restore_files = {{ source = "uploads", target = "/srv/app/uploads" }}
+[[application.restore.path_map]]
+from = "/srv"
+to = "{mapped}"
+"#,
+        mapped = toml_path(&mapped_root),
+    );
+    let contents = std::fs::read_to_string(&fixture.config).expect("config") + &extra;
+    std::fs::write(&fixture.config, contents).expect("config");
+
+    // The dry-run plan shows the mapping explicitly.
+    vaultline()
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(&fixture.restore_target)
+        .arg("--dry-run")
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("mapped from /srv/app/uploads"));
+
+    vaultline()
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(&fixture.restore_target)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success();
+
+    let landed = std::fs::read(mapped_root.join("app").join("uploads").join("hello.txt"))
+        .expect("the mapped restore lands at the translated target");
+    assert_eq!(landed, b"hello world");
+}
+
+/// A CLI `--path-map` entry overrides a configuration entry of equal
+/// prefix length (ties go to the later entry — the CLI comes last).
+#[test]
+fn cli_path_map_overrides_the_configuration_on_a_tie() {
+    if restic_bin().is_none() {
+        eprintln!("skipping: restic not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.backup();
+    let from_config = fixture._dir.path().join("from-config");
+    let from_cli = fixture._dir.path().join("from-cli");
+    let extra = format!(
+        r#"
+[[application.restore.steps]]
+restore_files = {{ source = "uploads", target = "/srv/app/uploads" }}
+[[application.restore.path_map]]
+from = "/srv"
+to = "{from_config}"
+"#,
+        from_config = toml_path(&from_config),
+    );
+    let contents = std::fs::read_to_string(&fixture.config).expect("config") + &extra;
+    std::fs::write(&fixture.config, contents).expect("config");
+
+    let cli_entry = format!("/srv={}", toml_path(&from_cli));
+    vaultline()
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(&fixture.restore_target)
+        .arg("--path-map")
+        .arg(&cli_entry)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success();
+
+    let landed = std::fs::read(from_cli.join("app").join("uploads").join("hello.txt"))
+        .expect("the CLI entry wins the tie");
+    assert_eq!(landed, b"hello world");
+    assert!(
+        !from_config
+            .join("app")
+            .join("uploads")
+            .join("hello.txt")
+            .exists(),
+        "the configuration entry lost the tie"
+    );
+}
+
 /// The defining disaster test (L6 shape): backup → destroy the data →
 /// restore → the application's data exists again and the database is
 /// intact.

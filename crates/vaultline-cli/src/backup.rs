@@ -252,14 +252,25 @@ fn run_quiesce(name: &str, quiesce: &vaultline_core::model::Quiesce) -> Result<(
     Ok(())
 }
 
+/// The resolution of a volume name to a host-reachable path.
+pub struct ResolvedVolumePath {
+    pub path: PathBuf,
+    /// True when the path came from `docker volume inspect`. On Docker
+    /// Desktop such mountpoints live inside the VM and may not be
+    /// reachable from the host — the sidecar semantics exist for that.
+    pub from_docker: bool,
+}
+
 /// Resolve a volume's capture path for direct semantics: a host path that
 /// exists is used as-is; otherwise the name is treated as a Docker volume
-/// and its mountpoint is resolved via `docker volume inspect` (the
-/// sidecar / pause-first semantics remain deferred).
-pub fn resolve_volume_path(name: &str) -> Result<PathBuf> {
+/// and its mountpoint is resolved via `docker volume inspect`.
+pub fn resolve_volume_path(name: &str) -> Result<ResolvedVolumePath> {
     let candidate = Path::new(name);
     if candidate.exists() {
-        return Ok(candidate.to_path_buf());
+        return Ok(ResolvedVolumePath {
+            path: candidate.to_path_buf(),
+            from_docker: false,
+        });
     }
     info!(volume = name, "resolving docker volume mountpoint");
     let output = Command::new("docker")
@@ -295,7 +306,178 @@ pub fn resolve_volume_path(name: &str) -> Result<PathBuf> {
             format!("docker reported no mountpoint for volume \"{name}\""),
         ));
     }
-    Ok(PathBuf::from(mountpoint))
+    Ok(ResolvedVolumePath {
+        path: PathBuf::from(mountpoint),
+        from_docker: true,
+    })
+}
+
+/// The pause-first guard: unpauses its container when dropped — ALWAYS,
+/// including on capture errors. An unpause failure is CRITICAL (the
+/// container stays paused) and is logged with the manual fix.
+pub struct ContainerPause {
+    container: String,
+    engaged: bool,
+}
+
+impl Drop for ContainerPause {
+    fn drop(&mut self) {
+        if !self.engaged {
+            return;
+        }
+        match Command::new("docker")
+            .args(["unpause", &self.container])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                info!(
+                    container = self.container,
+                    "writer container unpaused after the capture"
+                );
+            }
+            Ok(output) => {
+                tracing::error!(
+                    container = self.container,
+                    stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                    "CRITICAL: docker unpause FAILED — the container is still paused; run `docker unpause {}`",
+                    self.container
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    container = self.container,
+                    error = %e,
+                    "CRITICAL: docker unpause could not run — the container may still be paused; run `docker unpause {}`",
+                    self.container
+                );
+            }
+        }
+    }
+}
+
+/// Pause the writer container (the pause-first semantics, ADR-V0-3's
+/// third capture kind). A running container is paused and the returned
+/// guard unpauses it; a container that is NOT running is already
+/// quiescent, so the capture proceeds with a note; a running container
+/// whose pause fails aborts — never capture live writes under a pause
+/// that never happened.
+fn pause_container(container: &str) -> Result<ContainerPause> {
+    let output = Command::new("docker")
+        .args(["pause", container])
+        .output()
+        .map_err(|e| {
+            VaultlineError::with_source(
+                ErrorKind::Operational,
+                format!("docker is not available to pause container \"{container}\""),
+                e,
+            )
+        })?;
+    if output.status.success() {
+        info!(container, "writer container paused for the capture");
+        return Ok(ContainerPause {
+            container: container.to_string(),
+            engaged: true,
+        });
+    }
+    // The pause failed — is the container even running? Evidence, not
+    // stderr-message matching (the messages are docker's, not a contract).
+    let running = Command::new("docker")
+        .args(["inspect", "--format", "{{.State.Running}}", container])
+        .output();
+    match running {
+        Ok(state) if state.status.success() => {
+            let running = String::from_utf8_lossy(&state.stdout).trim() == "true";
+            if running {
+                Err(VaultlineError::new(
+                    ErrorKind::Operational,
+                    format!(
+                        "container \"{container}\" is running but docker pause failed: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ),
+                ))
+            } else {
+                warn!(
+                    container,
+                    "container is not running — the data is already quiescent; capturing without pausing"
+                );
+                Ok(ContainerPause {
+                    container: container.to_string(),
+                    engaged: false,
+                })
+            }
+        }
+        _ => Err(VaultlineError::new(
+            ErrorKind::Operational,
+            format!(
+                "docker pause failed for container \"{container}\" and its state could not be confirmed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        )),
+    }
+}
+
+/// Sidecar capture (the second of ADR-V0-3's volume semantics): the
+/// volume is mounted READ-ONLY into a throwaway alpine container that
+/// copies it into a host staging directory (bind-mounted into the
+/// container) — argv-only, no shell. This is the semantics that works
+/// where the host cannot reach the volume's mountpoint (Docker Desktop
+/// keeps volumes inside its VM). The alpine image is pulled on first
+/// use. The staging dir must stay alive for the backup run.
+pub fn stage_sidecar_capture(volume_name: &str) -> Result<(tempfile::TempDir, PathBuf)> {
+    let staging = tempfile::tempdir().map_err(|e| {
+        VaultlineError::with_source(
+            ErrorKind::Io,
+            format!(
+                "cannot create the staging directory for the sidecar capture of \"{volume_name}\""
+            ),
+            e,
+        )
+    })?;
+    let target = staging.path().to_path_buf();
+    // Forward slashes so the Windows path parses unambiguously as the
+    // host half of the bind mount.
+    let host_half = target.display().to_string().replace('\\', "/");
+    info!(
+        volume = volume_name,
+        "capturing the volume through a read-only sidecar container"
+    );
+    let output = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{volume_name}:/vaultline-src:ro"),
+            "-v",
+            &format!("{host_half}:/vaultline-out:rw"),
+            "alpine",
+            "cp",
+            "-a",
+            "/vaultline-src/.",
+            "/vaultline-out/",
+        ])
+        .output()
+        .map_err(|e| {
+            VaultlineError::with_source(
+                ErrorKind::Operational,
+                format!("cannot run the sidecar container for volume \"{volume_name}\""),
+                e,
+            )
+        })?;
+    if !output.status.success() {
+        return Err(VaultlineError::new(
+            ErrorKind::Operational,
+            format!(
+                "the sidecar capture of volume \"{volume_name}\" failed: {} (the alpine image must be present or pullable)",
+                String::from_utf8_lossy(&output.stderr)
+                    .lines()
+                    .rev()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
+        ));
+    }
+    Ok((staging, target))
 }
 
 pub fn run_backup(args: BackupRunArgs) -> Result<()> {
@@ -330,6 +512,7 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
                 manifest_entries.push(SourceManifestEntry {
                     name: source.name.clone(),
                     kind: "files".to_string(),
+                    path: None,
                 });
                 reconstructs.push(source.name.clone());
             }
@@ -342,6 +525,7 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
                         manifest_entries.push(SourceManifestEntry {
                             name: source.name.clone(),
                             kind: "git-mirror".to_string(),
+                            path: None,
                         });
                         reconstructs.push(source.name.clone());
                     }
@@ -351,6 +535,7 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
                         manifest_entries.push(SourceManifestEntry {
                             name: source.name.clone(),
                             kind: "git-reference".to_string(),
+                            path: None,
                         });
                         reconstructs.push(source.name.clone());
                     }
@@ -362,6 +547,7 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
                 manifest_entries.push(SourceManifestEntry {
                     name: source.name.clone(),
                     kind: "config_ref".to_string(),
+                    path: None,
                 });
                 let note = config_ref
                     .note
@@ -390,26 +576,64 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
         reconstructs.push(db.name.clone());
     }
 
-    // Volumes: direct semantics resolve to a path (host path or docker
-    // volume mountpoint) and join the same backup run.
-    let mut honesty_notes: Vec<String> = Vec::new();
+    // Volumes: all three capture semantics are executable now. Direct
+    // resolves to a path (host path or docker volume mountpoint) and
+    // joins the backup run; sidecar copies the volume out through a
+    // read-only sidecar container into a staging dir (the semantics for
+    // hosts that cannot reach docker mountpoints — Desktop VMs);
+    // pause-first pauses the declared writer container around a direct
+    // capture and ALWAYS unpauses (the guard's drop does it even on
+    // error paths). Each entry records WHERE the bytes were captured —
+    // restores locate the content through the record, never through the
+    // restore host's own resolution.
+    let mut pause_guards: Vec<ContainerPause> = Vec::new();
+    // Paths docker reported as mountpoints — the pre-flight below
+    // phrases their absence as the Desktop-VM signature, not a vanished
+    // source.
+    let mut docker_resolved: Vec<PathBuf> = Vec::new();
     for volume in &app.volumes {
         match volume.capture {
             CaptureSemantics::Direct => {
-                backup_paths.push(resolve_volume_path(&volume.name)?);
+                let resolved = resolve_volume_path(&volume.name)?;
+                backup_paths.push(resolved.path.clone());
+                if resolved.from_docker {
+                    docker_resolved.push(resolved.path.clone());
+                }
                 manifest_entries.push(SourceManifestEntry {
                     name: volume.name.clone(),
                     kind: "volume-direct".to_string(),
+                    path: Some(resolved.path.display().to_string()),
                 });
                 reconstructs.push(volume.name.clone());
             }
-            CaptureSemantics::Sidecar | CaptureSemantics::PauseFirst => {
-                let note = format!(
-                    "volume \"{}\" declared but not captured ({:?} semantics not implemented yet)",
-                    volume.name, volume.capture
-                );
-                warn!(note, "volume capture semantics deferred");
-                honesty_notes.push(note);
+            CaptureSemantics::PauseFirst => {
+                let container = volume
+                    .container
+                    .as_deref()
+                    .expect("validated: pause-first capture requires the writer container");
+                pause_guards.push(pause_container(container)?);
+                let resolved = resolve_volume_path(&volume.name)?;
+                backup_paths.push(resolved.path.clone());
+                if resolved.from_docker {
+                    docker_resolved.push(resolved.path.clone());
+                }
+                manifest_entries.push(SourceManifestEntry {
+                    name: volume.name.clone(),
+                    kind: "volume-pause-first".to_string(),
+                    path: Some(resolved.path.display().to_string()),
+                });
+                reconstructs.push(volume.name.clone());
+            }
+            CaptureSemantics::Sidecar => {
+                let (staging, target) = stage_sidecar_capture(&volume.name)?;
+                backup_paths.push(target.clone());
+                _staging.push(staging);
+                manifest_entries.push(SourceManifestEntry {
+                    name: volume.name.clone(),
+                    kind: "volume-sidecar".to_string(),
+                    path: Some(target.display().to_string()),
+                });
+                reconstructs.push(volume.name.clone());
             }
         }
     }
@@ -421,6 +645,15 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
     // source aborts the backup naming the path.
     for path in &backup_paths {
         if !path.exists() {
+            if docker_resolved.contains(path) {
+                return Err(VaultlineError::new(
+                    ErrorKind::Operational,
+                    format!(
+                        "the docker-reported mountpoint {} is not reachable from this host (Docker Desktop keeps volumes inside its VM) — declare the volume with capture = \"sidecar\" instead",
+                        path.display()
+                    ),
+                ));
+            }
             return Err(VaultlineError::new(
                 ErrorKind::Operational,
                 format!(
@@ -469,11 +702,10 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
         },
         database_metadata,
         configuration_metadata: ConfigMetadata {
-            note: if honesty_notes.is_empty() {
-                "full capture declared".to_string()
-            } else {
-                honesty_notes.join("; ")
-            },
+            // Every declared capture semantics is executable now — the
+            // declared-but-not-captured era is over (Phase 8).
+            note: "full capture declared — every declared source, database, and volume captured"
+                .to_string(),
         },
         engine_snapshot: EngineSnapshotRef {
             engine: "restic".to_string(),
@@ -579,7 +811,10 @@ mod tests {
                 app_checks: Vec::new(),
             },
             rehearsal: None,
-            restore: vaultline_core::model::RestoreProcedure { steps: Vec::new() },
+            restore: vaultline_core::model::RestoreProcedure {
+                steps: Vec::new(),
+                path_map: Vec::new(),
+            },
         }
     }
 

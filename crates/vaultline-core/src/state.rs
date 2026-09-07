@@ -296,6 +296,7 @@ mod tests {
                 entries: vec![SourceManifestEntry {
                     name: "uploads".to_string(),
                     kind: "files".to_string(),
+                    path: Some("/srv/thornwa/uploads".to_string()),
                 }],
             },
             database_metadata: vec![DatabaseSnapshotMeta {

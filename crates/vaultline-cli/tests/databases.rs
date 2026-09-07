@@ -630,22 +630,38 @@ capture = "direct"
     );
 }
 
-/// A sidecar/pause-first volume stays declared-but-not-captured — the
-/// honesty contract — while the rest of the backup proceeds.
+/// The sidecar capture end-to-end (Phase 8): the volume is copied out
+/// through a read-only sidecar container, the snapshot's manifest
+/// RECORDS the captured path, and the restore locates the bytes through
+/// that record (never the restore host's resolution). A host-path
+/// volume makes the disaster round (wipe → restore → data intact)
+/// runnable on Desktop VMs and native Linux alike.
 #[test]
-fn sidecar_volume_is_recorded_as_not_captured() {
+fn sidecar_capture_copies_the_volume_into_the_snapshot() {
     if restic_bin().is_none() {
         eprintln!("skipping: restic not available");
         return;
     }
+    if docker_available().is_none() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
     let fixture = Fixture::new();
+    let volume = fixture._dir.path().join("app-data");
+    std::fs::create_dir_all(&volume).expect("volume dir");
+    std::fs::write(volume.join("sessions.bin"), b"irreplaceable session state").expect("data");
     append_database(
         &fixture.config,
-        r#"
+        &format!(
+            r#"
 [[application.volumes]]
-name = "sidecar-volume"
+name = "{volume}"
 capture = "sidecar"
+[[application.restore.steps]]
+restore_volume = {{ volume = "{volume}" }}
 "#,
+            volume = volume.display().to_string().replace('\\', "/"),
+        ),
     );
 
     vaultline()
@@ -655,24 +671,273 @@ capture = "sidecar"
         .env("VAULTLINE_STATE_DIR", fixture.state_dir())
         .assert()
         .success()
-        .stderr(predicate::str::contains("not captured"));
+        .stdout(predicate::str::contains("backup complete"));
 
     let state: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(fixture.state_dir().join("state.json")).expect("state file"),
     )
     .expect("state parses");
     let snapshot = &state["applications"]["thornwa"]["snapshots"][0];
+    let volume_name = volume.display().to_string().replace('\\', "/");
+    let entry = snapshot["source_manifest"]["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|e| e["name"] == volume_name)
+        .expect("the volume has a manifest entry");
+    assert_eq!(entry["kind"], "volume-sidecar");
+    assert!(
+        entry["path"].is_string(),
+        "the captured path is recorded for the restore"
+    );
+    assert!(
+        snapshot["restore_metadata"]["reconstructs"]
+            .as_array()
+            .expect("reconstructs")
+            .iter()
+            .any(|n| n.as_str() == Some(volume_name.as_str())),
+        "the volume joins the reconstructs list"
+    );
     assert!(
         snapshot["configuration_metadata"]["note"]
             .as_str()
-            .unwrap()
-            .contains("sidecar-volume")
+            .expect("note")
+            .contains("full capture declared"),
+        "no declared-but-not-captured honesty note remains"
     );
+
+    // The disaster round: destroy the volume, restore through the
+    // recorded capture path, and find the bytes again.
+    std::fs::remove_dir_all(&volume).expect("destroy the volume");
+    std::fs::create_dir_all(&volume).expect("empty volume dir");
+    let snapshot_id = snapshot["id"].as_str().expect("snapshot id");
+    vaultline()
+        .args(["restore", snapshot_id, "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(fixture._dir.path().join("restored"))
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success();
+    let restored = std::fs::read(volume.join("sessions.bin")).expect("restored data");
+    assert_eq!(restored, b"irreplaceable session state");
+}
+
+/// The pause-first capture end-to-end (Phase 8): the writer container
+/// is paused around a direct capture and — the CRITICAL property — is
+/// unpaused again afterwards, verified by the engine's own state.
+#[test]
+fn pause_first_capture_pauses_and_unpauses_the_writer() {
+    if restic_bin().is_none() {
+        eprintln!("skipping: restic not available");
+        return;
+    }
+    if docker_available().is_none() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    let volume = fixture._dir.path().join("writer-data");
+    std::fs::create_dir_all(&volume).expect("volume dir");
+    std::fs::write(volume.join("journal.txt"), "consistent bytes").expect("data");
+    let writer = format!("vl-writer-{}", std::process::id());
+    let cleanup = |writer: &str| {
+        let _ = Command::new("docker").args(["rm", "-f", writer]).output();
+    };
+    cleanup(&writer);
+    let started = Command::new("docker")
+        .args(["run", "-d", "--name", &writer, "alpine", "sleep", "300"])
+        .output()
+        .expect("docker run");
+    assert!(started.status.success(), "writer starts: {:?}", started);
+
+    append_database(
+        &fixture.config,
+        &format!(
+            r#"
+[[application.volumes]]
+name = "{volume}"
+capture = "pause-first"
+container = "{writer}"
+[[application.restore.steps]]
+restore_volume = {{ volume = "{volume}" }}
+"#,
+            volume = volume.display().to_string().replace('\\', "/"),
+        ),
+    );
+
+    vaultline()
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backup complete"));
+
+    // The writer must be unpaused and running again — the pause window
+    // spans the capture, never beyond it.
+    let state = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Paused}} {{.State.Running}}",
+            &writer,
+        ])
+        .output()
+        .expect("docker inspect");
     assert!(
-        !snapshot["restore_metadata"]["reconstructs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|n| n.as_str() == Some("sidecar-volume"))
+        state.status.success() && String::from_utf8_lossy(&state.stdout).trim() == "false true",
+        "the writer is unpaused and running after the capture: {:?}",
+        String::from_utf8_lossy(&state.stdout)
     );
+
+    let state_file: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.state_dir().join("state.json")).expect("state file"),
+    )
+    .expect("state parses");
+    let snapshot = &state_file["applications"]["thornwa"]["snapshots"][0];
+    let volume_name = volume.display().to_string().replace('\\', "/");
+    let entry = snapshot["source_manifest"]["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|e| e["name"] == volume_name)
+        .expect("the volume has a manifest entry");
+    assert_eq!(entry["kind"], "volume-pause-first");
+    assert!(entry["path"].is_string(), "the captured path is recorded");
+
+    // The disaster round as well: wipe, restore through the record.
+    std::fs::remove_dir_all(&volume).expect("destroy the volume");
+    std::fs::create_dir_all(&volume).expect("empty volume dir");
+    let snapshot_id = snapshot["id"].as_str().expect("snapshot id");
+    vaultline()
+        .args(["restore", snapshot_id, "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(fixture._dir.path().join("restored"))
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success();
+    let restored = std::fs::read(volume.join("journal.txt")).expect("restored data");
+    assert_eq!(restored, b"consistent bytes");
+    cleanup(&writer);
+}
+
+/// The pause guard's CRITICAL property: when the capture FAILS after
+/// the pause, the container is still unpaused (a backup error must
+/// never leave a production container paused).
+#[test]
+fn pause_guard_unpauses_even_when_the_capture_fails() {
+    if restic_bin().is_none() {
+        eprintln!("skipping: restic not available");
+        return;
+    }
+    if docker_available().is_none() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    let writer = format!("vl-writer-fail-{}", std::process::id());
+    let _ = Command::new("docker").args(["rm", "-f", &writer]).output();
+    let started = Command::new("docker")
+        .args(["run", "-d", "--name", &writer, "alpine", "sleep", "300"])
+        .output()
+        .expect("docker run");
+    assert!(started.status.success(), "writer starts: {:?}", started);
+
+    // The volume name resolves to nothing: not an existing path, not a
+    // docker volume — the capture errors AFTER the pause engaged.
+    let missing = fixture._dir.path().join("missing-volume");
+    append_database(
+        &fixture.config,
+        &format!(
+            r#"
+[[application.volumes]]
+name = "{missing}"
+capture = "pause-first"
+container = "{writer}"
+"#,
+            missing = missing.display().to_string().replace('\\', "/"),
+        ),
+    );
+
+    vaultline()
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            missing.display().to_string().replace('\\', "/"),
+        ));
+
+    // The guard dropped on the error path — the writer is unpaused.
+    let state = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Paused}} {{.State.Running}}",
+            &writer,
+        ])
+        .output()
+        .expect("docker inspect");
+    assert!(
+        state.status.success() && String::from_utf8_lossy(&state.stdout).trim() == "false true",
+        "the writer is unpaused even though the capture failed: {:?}",
+        String::from_utf8_lossy(&state.stdout)
+    );
+    let _ = Command::new("docker").args(["rm", "-f", &writer]).output();
+}
+
+/// A STOPPED writer is already quiescent — pause-first proceeds with a
+/// note instead of failing on the un-pausable container (evidence from
+/// the engine's state, never stderr-message matching).
+#[test]
+fn pause_first_proceeds_when_the_writer_is_stopped() {
+    if restic_bin().is_none() {
+        eprintln!("skipping: restic not available");
+        return;
+    }
+    if docker_available().is_none() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    let volume = fixture._dir.path().join("stopped-writer-data");
+    std::fs::create_dir_all(&volume).expect("volume dir");
+    std::fs::write(volume.join("data.txt"), "quiescent bytes").expect("data");
+    let writer = format!("vl-writer-stopped-{}", std::process::id());
+    let _ = Command::new("docker").args(["rm", "-f", &writer]).output();
+    let created = Command::new("docker")
+        .args(["create", "--name", &writer, "alpine", "sleep", "300"])
+        .output()
+        .expect("docker create");
+    assert!(created.status.success(), "writer created: {:?}", created);
+
+    append_database(
+        &fixture.config,
+        &format!(
+            r#"
+[[application.volumes]]
+name = "{volume}"
+capture = "pause-first"
+container = "{writer}"
+"#,
+            volume = volume.display().to_string().replace('\\', "/"),
+        ),
+    );
+
+    vaultline()
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("quiescent"));
+    let _ = Command::new("docker").args(["rm", "-f", &writer]).output();
 }

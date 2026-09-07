@@ -156,6 +156,10 @@ pub enum WireDumpFormat {
 pub struct WireVolume {
     pub name: String,
     pub capture: WireCaptureSemantics,
+    /// The writer container to pause around the capture (pause-first
+    /// only — validation rejects it with any other capture).
+    #[serde(default)]
+    pub container: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -250,6 +254,17 @@ pub struct WireRehearsal {
 pub struct WireRestore {
     #[serde(default)]
     pub steps: Vec<WireRestoreStep>,
+    /// Cross-platform path mappings (longest prefix wins; later
+    /// entries break ties).
+    #[serde(default)]
+    pub path_map: Vec<WirePathMapEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WirePathMapEntry {
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -455,6 +470,23 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
                 format!("application.volumes[{i}].name"),
                 format!("duplicate volume name \"{}\"", volume.name),
             ));
+        }
+        // Pause-first needs its writer; a container on any other capture
+        // is a meaningless field (rejected, never silently ignored).
+        match (&volume.capture, volume.container.as_deref()) {
+            (WireCaptureSemantics::PauseFirst, None | Some("")) => {
+                errors.push(ValidationError::new(
+                    format!("application.volumes[{i}].container"),
+                    "pause-first capture requires the writer container to pause",
+                ));
+            }
+            (WireCaptureSemantics::Direct | WireCaptureSemantics::Sidecar, Some(_)) => {
+                errors.push(ValidationError::new(
+                    format!("application.volumes[{i}].container"),
+                    "container is only meaningful with capture = \"pause-first\"",
+                ));
+            }
+            _ => {}
         }
     }
 
@@ -674,6 +706,30 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
         }
     }
 
+    // Path map: non-empty halves, unique `from` prefixes (duplicates
+    // would make the tie-break order-dependent instead of explicit).
+    let mut seen_from = std::collections::HashSet::new();
+    for (i, entry) in app.restore.path_map.iter().enumerate() {
+        let base = format!("application.restore.path_map[{i}]");
+        if entry.from.is_empty() {
+            errors.push(ValidationError::new(
+                format!("{base}.from"),
+                "must not be empty",
+            ));
+        } else if !seen_from.insert(entry.from.as_str()) {
+            errors.push(ValidationError::new(
+                format!("{base}.from"),
+                format!("duplicate from prefix \"{}\"", entry.from),
+            ));
+        }
+        if entry.to.is_empty() {
+            errors.push(ValidationError::new(
+                format!("{base}.to"),
+                "must not be empty",
+            ));
+        }
+    }
+
     let application = if errors.is_empty() {
         Some(convert(
             &config.application,
@@ -852,6 +908,7 @@ fn convert(
                 WireCaptureSemantics::Sidecar => CaptureSemantics::Sidecar,
                 WireCaptureSemantics::PauseFirst => CaptureSemantics::PauseFirst,
             },
+            container: v.container.clone(),
         })
         .collect();
 
@@ -934,6 +991,15 @@ fn convert(
                     }
                 })
                 .collect(),
+            path_map: app
+                .restore
+                .path_map
+                .iter()
+                .map(|entry| crate::model::PathMapEntry {
+                    from: entry.from.clone(),
+                    to: entry.to.clone(),
+                })
+                .collect(),
         },
     }
 }
@@ -1006,6 +1072,10 @@ restore_database = { database = "main", target_database = "thornwa" }
 restore_volume = { volume = "thornwa_pgdata" }
 [[application.restore.steps]]
 wait_healthy = { url = "http://localhost:3000/health" }
+
+[[application.restore.path_map]]
+from = "/srv"
+to = "C:/srv"
 "#;
 
     #[test]
@@ -1031,6 +1101,9 @@ wait_healthy = { url = "http://localhost:3000/health" }
         assert_eq!(app.verification.app_checks.len(), 1);
         assert_eq!(app.verification.app_checks[0].name, "pg-integrity");
         assert_eq!(app.verification.app_checks[0].command, "psql");
+        assert_eq!(app.restore.path_map.len(), 1);
+        assert_eq!(app.restore.path_map[0].from, "/srv");
+        assert_eq!(app.restore.path_map[0].to, "C:/srv");
         // Everything the policy declares is executable now — no warnings.
         assert_eq!(outcome.warnings.len(), 0);
     }
@@ -1155,6 +1228,94 @@ level = 1
                 .errors
                 .iter()
                 .any(|e| e.message.contains("unknown source \"nope\""))
+        );
+    }
+
+    #[test]
+    fn pause_first_requires_its_writer_container() {
+        let contents = VALID.replace("capture = \"direct\"", "capture = \"pause-first\"");
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome.errors.iter().any(|e| {
+                e.path.contains(".container") && e.message.contains("pause-first capture requires")
+            }),
+            "{:?}",
+            outcome.errors
+        );
+    }
+
+    #[test]
+    fn pause_first_with_container_converts() {
+        let contents = VALID.replace(
+            "capture = \"direct\"",
+            "capture = \"pause-first\"\ncontainer = \"app\"",
+        );
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(outcome.is_valid(), "{:?}", outcome.errors);
+        let app = outcome.application.expect("application");
+        assert_eq!(
+            app.volumes[0].container.as_deref(),
+            Some("app"),
+            "the writer container converts"
+        );
+    }
+
+    #[test]
+    fn container_is_rejected_on_non_pause_first_capture() {
+        let contents = VALID.replace(
+            "capture = \"direct\"",
+            "capture = \"direct\"\ncontainer = \"app\"",
+        );
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome.errors.iter().any(|e| {
+                e.path.contains(".container") && e.message.contains("only meaningful with capture")
+            }),
+            "{:?}",
+            outcome.errors
+        );
+    }
+
+    #[test]
+    fn path_map_entries_are_validated() {
+        let empty_from = VALID.replace("from = \"/srv\"", "from = \"\"");
+        let outcome = validate(parse_str(&empty_from).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.path.contains(".path_map[0].from")),
+            "{:?}",
+            outcome.errors
+        );
+
+        let empty_to = VALID.replace("to = \"C:/srv\"", "to = \"\"");
+        let outcome = validate(parse_str(&empty_to).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.path.contains(".path_map[0].to")),
+            "{:?}",
+            outcome.errors
+        );
+
+        let duplicate = format!(
+            "{}\n[[application.restore.path_map]]\nfrom = \"/srv\"\nto = \"D:/srv\"\n",
+            VALID
+        );
+        let outcome = validate(parse_str(&duplicate).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome.errors.iter().any(|e| {
+                e.path.contains(".path_map[1].from") && e.message.contains("duplicate from prefix")
+            }),
+            "{:?}",
+            outcome.errors
         );
     }
 

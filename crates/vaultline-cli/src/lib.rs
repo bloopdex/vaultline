@@ -50,5 +50,6 @@ fn dispatch(cli: cli::Cli) -> Result<(), VaultlineError> {
         cli::Command::Doctor(args) => ops::run_doctor(args),
         cli::Command::Status(args) => ops::run_status(args),
         cli::Command::Timer(args) => timer::run_timer(args),
+        cli::Command::Version(args) => cli::run_version(args),
     }
 }

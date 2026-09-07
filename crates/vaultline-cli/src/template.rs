@@ -47,6 +47,10 @@ note = "secrets — reference only"
 # [[application.volumes]]
 # name = "{name}_data"
 # capture = "direct"            # direct | sidecar | pause-first
+# container = "app"             # pause-first only: the writer container to pause
+# sidecar captures through a read-only sidecar container (works where the
+# host cannot reach the volume's mountpoint — e.g. Docker Desktop); it
+# pulls the "alpine" image on first use.
 
 # WHERE the snapshot repository lives (ADR-V0-4). Credentials are env-var
 # names, never literals. Other backends: kind = "s3" (endpoint, bucket,
@@ -88,6 +92,13 @@ level = 3
 # this application after a disaster.
 [[application.restore.steps]]
 restore_files = { source = "uploads", target = "/srv/{name}/uploads" }
+
+# Cross-platform restore: declared production paths translated to this
+# host's layout (longest prefix wins; later entries break ties; also
+# `vaultline restore --path-map from=to`, which overrides on ties):
+# [[application.restore.path_map]]
+# from = "/srv"
+# to = "C:/srv"
 
 # [[application.restore.steps]]
 # restore_database = { database = "main", target_database = "{name}" }

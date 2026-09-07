@@ -335,7 +335,10 @@ mod tests {
                 app_checks: Vec::new(),
             },
             rehearsal: None,
-            restore: RestoreProcedure { steps: Vec::new() },
+            restore: RestoreProcedure {
+                steps: Vec::new(),
+                path_map: Vec::new(),
+            },
         }
     }
 

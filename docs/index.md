@@ -7,7 +7,10 @@ The documentation tree, organized by concern.
 - [architecture.md](architecture.md) — the design, crate layout, and the
   engine-agnostic boundary
 - [adr/](adr/) — architecture decision records (language, engine strategy,
-  the recovery model, the storage abstraction)
+  the recovery model, the storage abstraction, operations, hardening,
+  reliability, release & ecosystem)
+- [release/RELEASE-CHECKLIST.md](release/RELEASE-CHECKLIST.md) — the
+  reproducible release procedure (tag-driven, checksummed, smoke-tested)
 
 ## Reference
 

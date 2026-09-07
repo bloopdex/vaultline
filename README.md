@@ -50,25 +50,45 @@ defining end-to-end test.
   rules, git mirror staging, config references recorded but never copied,
   **per-engine database dumps** (PostgreSQL `pg_dump -Fc`, MySQL/MariaDB
   `mysqldump`, SQLite via the Online Backup API — credentials never in
-  argv), volume capture (direct semantics), repository initialization on
-  first use, the backup, and the inline L2 integrity check when the
-  policy demands it; the snapshot (engine reference, database metadata,
-  verification level actually reached, what it can reconstruct) is
-  recorded in the state file
-- `vaultline backup list` — the recorded snapshots per application
+  argv), **all three volume capture semantics** (direct; sidecar — a
+  read-only sidecar container for hosts that cannot reach docker
+  mountpoints; pause-first — the declared writer is paused and ALWAYS
+  unpaused, even on capture failure), repository initialization on
+  first use, the vanished-source pre-flight (a missing capture path
+  aborts the run), the backup, and the inline L2 integrity check when
+  the policy demands it; the snapshot (engine reference, database
+  metadata, capture paths, verification level actually reached, what
+  it can reconstruct) is recorded in the state file
+- `vaultline backup list` / `backup inspect` — the recorded snapshots
+  per application and their full records
+- `vaultline restore <snapshot>` — executes the definition's restore
+  procedure sandbox-then-promote: **existing files are never
+  overwritten**, databases restore through their engine's tool, volumes
+  restore through their recorded capture path, health endpoints are
+  polled; `--path-map` + the configuration's `path_map` translate
+  declared production targets across platforms (ADR-008)
+- `vaultline backup verify` — proves the verification policy L3–L6,
+  including the full recovery rehearsal at L6 with executable app
+  checks, and records the level actually reached
+- `vaultline backup prune` — explainable retention (per-snapshot
+  reasons, dry-run by default, engine cross-check before any forget)
+- `vaultline schedule run` / `doctor` / `status` / `timer` — the
+  operations surface (due-ness execution, diagnostics, systemd units)
+- `vaultline version` — the versioned surfaces (binary, state schema,
+  engine) in human and machine forms
 - storage backends: local (fully integration-tested), S3-compatible
   (proven against MinIO), SFTP (URL-mapped; agent/ssh-config auth)
 - the canonical recovery model (ADR-003), typed TOML configuration
   (ADR-004), the error model with documented exit codes, structured
-  logging, named metrics
+  logging, named metrics, the benchmark baseline with a regression gate
 - supply-chain verification from day one: cargo-vet (with public audit-store
   imports and certified direct dependencies) and cargo-deny
+- release machinery: installers with checksum verification, the
+  tag-driven release workflow, and the reproducible release checklist
 
-MySQL/MariaDB capture is implemented but not yet integration-proven;
-volume sidecar/pause-first semantics, restore, prune, and verification
-beyond L2 are declared but not executed — see
-[docs/limitations.md](docs/limitations.md) for exactly what is missing and
-what would remove each limitation.
+The remaining honesty items — SFTP `key_file`/`known_hosts` wiring, the
+hosting decision — are recorded in
+[docs/limitations.md](docs/limitations.md) in the four-part form.
 
 ## Quick start
 

@@ -655,3 +655,28 @@ level = 1
         .assert()
         .success();
 }
+
+/// The release surfaces: `version` reports the binary version, the
+/// state-file schema version, and the orchestrated engine — human and
+/// machine forms (the release-checklist contract).
+#[test]
+fn version_reports_the_versioned_surfaces() {
+    vaultline()
+        .args(["version"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")))
+        .stdout(predicate::str::contains("state schema: v1"))
+        .stdout(predicate::str::contains("restic"));
+
+    vaultline()
+        .args(["version", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "\"version\":\"{}\"",
+            env!("CARGO_PKG_VERSION")
+        )))
+        .stdout(predicate::str::contains("\"state_schema\":1"))
+        .stdout(predicate::str::contains("\"engine\":\"restic\""));
+}

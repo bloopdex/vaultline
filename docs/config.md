@@ -44,6 +44,16 @@ consistency = { logical = { format = "custom" } }   # custom (-Fc) | sql
 [[application.volumes]]
 name = "thornwa_pgdata"
 capture = "direct"              # direct | sidecar | pause-first
+# container = "app"             # pause-first only: the writer to pause
+
+# capture semantics:
+#   direct       capture the volume's path (host path or docker mountpoint)
+#   sidecar      copy it out through a read-only alpine sidecar container
+#                (works where the host cannot reach docker mountpoints,
+#                e.g. Docker Desktop; the image is pulled on first use)
+#   pause-first  pause `container` first, capture directly, ALWAYS unpause
+#                (a stopped writer is already quiescent - it proceeds with
+#                a note)
 
 # --- storage (ADR-004) -------------------------------------------------
 [application.storage]
@@ -87,6 +97,11 @@ restore_database = { database = "main", target_database = "thornwa" }
 restore_volume = { volume = "thornwa_pgdata" }
 [[application.restore.steps]]
 wait_healthy = { url = "http://localhost:3000/health" }
+
+# --- cross-platform restore (ADR-008) -----------------------------------
+# [[application.restore.path_map]]  # declared (production) target
+# from = "/srv"                    # prefixes translated to THIS host's
+# to = "C:/srv"                    # layout; longest prefix wins
 ```
 
 ## The application-name rule
@@ -117,6 +132,11 @@ with an alphanumeric (`thornwa`, `thorn-wa2`; not `Thornwa`, `-thornwa`,
   them), so the same definition could fire at different times (ADR-005)
 - app checks: unique names, non-empty `command` (args are argv)
 - L6 requires `application.rehearsal.target` (non-empty)
+- volumes: `pause-first` requires `container` (the writer to pause);
+  `container` with any other capture is rejected (a meaningless field
+  is never silently ignored)
+- path map entries: non-empty `from` and `to`, unique `from`
+  prefixes (duplicates would make the tie-break order-dependent)
 - the configuration file may not exceed 10 MiB (the hardening limit)
 - every restore-step reference resolves to a declared source / database /
   volume name

@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.8.0 — 2026-09-07
+
+Release & ecosystem — the declared-but-not-captured era ends, restores
+cross platforms, and the release machinery exists:
+
+- **Sidecar volume capture** (ADR-008): `capture = "sidecar"` mounts
+  the volume read-only into a throwaway alpine container that copies it
+  into a staging dir (argv-only, no shell, no new dependencies) — the
+  semantics that works where the host cannot reach docker mountpoints
+  (Docker Desktop keeps volumes inside its VM). The image is pulled on
+  first use.
+- **Pause-first volume capture**: the volume declares its writer
+  (`container`; validation requires it with pause-first and rejects it
+  otherwise). The executor pauses the writer, captures through the
+  direct mechanism, and unpauses ALWAYS — a drop guard, so even a
+  failed capture unpauses (an unpause failure is logged CRITICAL with
+  the manual fix); a stopped writer is already quiescent and proceeds
+  with a note (decided by the engine's state, never stderr-message
+  matching); a running writer whose pause fails aborts. All three
+  semantics are proven against real Docker containers, including the
+  failure-path unpause.
+- **Snapshots record their capture paths**: every volume manifest entry
+  carries where the bytes were captured; restores locate content
+  through the record, never through the restore host's own resolution —
+  a genuine cross-host property (and the sidecar staging path, which
+  exists only during the backup, becomes restorable). Pre-0.8.0
+  snapshots fall back to the restore host's resolution.
+- **Cross-platform restore**: `[[application.restore.path_map]]` +
+  repeatable `--path-map from=to` translate declared production target
+  prefixes into this host's layout (longest prefix wins, CLI entries
+  break ties; the dry-run plan shows each mapping). The snapshot-path
+  translation became platform-independent (backslash/drive
+  normalization), so content captured on either OS is located on
+  either OS — engine-verified in both directions (probed 2026-09-07:
+  Linux restic stages a Windows-made snapshot as a plain `C/...`
+  directory tree, exactly the form the lookup addresses).
+- **The Desktop mountpoint gap is named**: a direct/pause-first capture
+  whose docker-reported mountpoint the host cannot reach aborts with an
+  error naming the sidecar remedy (the pre-flight's Desktop signature)
+  instead of a misleading "vanished source".
+- **Release machinery**: `vaultline version` (binary / state schema /
+  engine, human + `--json`); installers for both platforms with
+  SHA-256 verification against the published checksums (release base =
+  a marked placeholder until the repository is hosted); the local
+  bundle script `scripts/release.ps1` (clean tree, release build,
+  checksums, artifact smoke); the tag-driven `release.yml` (strict
+  tag↔workspace-version check, static musl Linux + Windows builds,
+  per-artifact smoke, gh-CLI publication); and the reproducible
+  release checklist (`docs/release/RELEASE-CHECKLIST.md`).
+- **The ecosystem edges stay declared**: the DeployScore/EnvFP signal
+  edges activate only when both sides define the contract (SOT Section
+  7) — recorded as the activation condition, no invented transport.
+- **170 tests passing**, 0 failures, all gates green (the four new
+  volume proofs and the two cross-platform restore proofs included).
+
 ## 0.7.0 — 2026-09-07
 
 Reliability & performance — three recorded gaps closed, one pair

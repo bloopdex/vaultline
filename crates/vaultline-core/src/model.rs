@@ -174,6 +174,10 @@ pub enum DumpFormat {
 pub struct Volume {
     pub name: String,
     pub capture: CaptureSemantics,
+    /// The writer container to pause around the capture (pause-first
+    /// semantics only — validation rejects it with any other capture).
+    #[serde(default)]
+    pub container: Option<String>,
 }
 
 /// How a volume's bytes are captured. The decision between these is an
@@ -328,6 +332,19 @@ impl VerificationLevel {
 pub struct RestoreProcedure {
     #[serde(default)]
     pub steps: Vec<RestoreStep>,
+    /// Cross-platform path mappings: a declared (production) target
+    /// prefix is replaced by this host's layout (longest prefix wins,
+    /// later entries break ties — CLI entries come last). Applies to the
+    /// live restore's path targets, never to the rehearsal mirrors.
+    #[serde(default)]
+    pub path_map: Vec<PathMapEntry>,
+}
+
+/// One `from` → `to` prefix mapping of [`RestoreProcedure::path_map`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PathMapEntry {
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -377,6 +394,12 @@ pub struct SourceManifest {
 pub struct SourceManifestEntry {
     pub name: String,
     pub kind: String,
+    /// The path the bytes were captured from, recorded at backup time.
+    /// Restores locate the content through this record — never through
+    /// the restore host's own resolution (hosts differ; a docker volume
+    /// may not even exist on the restore host).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -456,6 +479,7 @@ mod tests {
             volumes: vec![Volume {
                 name: "thornwa_pgdata".to_string(),
                 capture: CaptureSemantics::Direct,
+                container: None,
             }],
             storage: StorageTarget {
                 kind: StorageKind::Local {
@@ -495,6 +519,10 @@ mod tests {
                         url: "http://localhost:3000/health".to_string(),
                     },
                 ],
+                path_map: vec![PathMapEntry {
+                    from: "/srv".to_string(),
+                    to: "C:/srv".to_string(),
+                }],
             },
         }
     }
@@ -554,6 +582,7 @@ mod tests {
                 entries: vec![SourceManifestEntry {
                     name: "uploads".to_string(),
                     kind: "files".to_string(),
+                    path: Some("/srv/thornwa/uploads".to_string()),
                 }],
             },
             database_metadata: vec![DatabaseSnapshotMeta {

@@ -30,6 +30,7 @@ use vaultline_core::config;
 use vaultline_core::error::{ErrorKind, Result, VaultlineError};
 use vaultline_core::model::{
     Application, BackupSnapshot, DatabaseConnection, DatabaseType, RestoreStep, SourceKind,
+    SourceManifest,
 };
 use vaultline_core::state::State;
 
@@ -65,6 +66,46 @@ pub struct RestoreArgs {
     /// Machine-readable output on stdout.
     #[arg(long)]
     pub json: bool,
+
+    /// Cross-platform path mapping, `from=to` (repeatable): declared
+    /// production path prefixes translated to this host's layout.
+    /// Entries merge after the configuration's own path_map; the
+    /// longest matching prefix wins and later entries break ties, so
+    /// these override the configuration.
+    #[arg(long = "path-map", value_parser = parse_path_map)]
+    pub path_map: Vec<(String, String)>,
+}
+
+/// Parse one `from=to` path-map entry (neither half may be empty).
+fn parse_path_map(s: &str) -> std::result::Result<(String, String), String> {
+    let (from, to) = s
+        .split_once('=')
+        .ok_or_else(|| "expected FROM=TO".to_string())?;
+    if from.is_empty() || to.is_empty() {
+        return Err("expected FROM=TO (neither half may be empty)".to_string());
+    }
+    Ok((from.to_string(), to.to_string()))
+}
+
+/// Apply the cross-platform path map to a live-restore target. The
+/// longest matching prefix wins; ties go to the LATER entry (CLI entries
+/// come last, so they override the configuration on ties). The
+/// rehearsal mirrors never pass through here — they represent the
+/// production layout, not this host's.
+pub fn apply_path_map(target: &str, map: &[(String, String)]) -> String {
+    let mut best: Option<(usize, &str)> = None;
+    for (from, to) in map {
+        if target.len() >= from.len()
+            && target.starts_with(from.as_str())
+            && best.is_none_or(|(len, _)| from.len() >= len)
+        {
+            best = Some((from.len(), to.as_str()));
+        }
+    }
+    match best {
+        Some((len, to)) => format!("{to}{}", &target[len..]),
+        None => target.to_string(),
+    }
 }
 
 #[derive(clap::Args)]
@@ -137,23 +178,17 @@ pub fn select_snapshot<'a>(
 }
 
 /// Translate a host path into the path form restic stores in the snapshot:
-/// on Windows the drive letter becomes the first path component
-/// (`C:/x` → `/C/x`); on Unix paths map 1:1. (Same-platform restore is
-/// the supported case — a cross-platform restore is recorded as a
-/// limitation.)
+/// backslashes become forward slashes and a Windows drive prefix becomes a
+/// leading `/C/...` component (restic drops the colon). The translation is
+/// platform-independent so a snapshot made on one OS can be located on
+/// another (the cross-platform restore path — see the path map).
 pub fn snapshot_path_of(host_path: &str) -> String {
-    #[cfg(windows)]
-    {
-        if host_path.len() >= 2 && host_path.as_bytes()[1] == b':' {
-            let drive = &host_path[..1];
-            return format!("/{drive}{}", host_path[2..].replace('\\', "/"));
-        }
-        host_path.replace('\\', "/")
+    let slashed = host_path.replace('\\', "/");
+    if slashed.len() >= 2 && slashed.as_bytes()[1] == b':' {
+        let drive = &slashed[..1];
+        return format!("/{drive}{}", &slashed[2..]);
     }
-    #[cfg(not(windows))]
-    {
-        host_path.to_string()
-    }
+    slashed
 }
 
 /// Copy a directory tree into a destination: directories are created,
@@ -365,7 +400,11 @@ struct PlannedStep {
     detail: String,
 }
 
-fn plan_steps(app: &Application, snapshot: &BackupSnapshot) -> Result<Vec<PlannedStep>> {
+fn plan_steps(
+    app: &Application,
+    snapshot: &BackupSnapshot,
+    path_map: &[(String, String)],
+) -> Result<Vec<PlannedStep>> {
     let mut steps = Vec::new();
     let declared: HashSet<&str> = snapshot
         .restore_metadata
@@ -376,7 +415,15 @@ fn plan_steps(app: &Application, snapshot: &BackupSnapshot) -> Result<Vec<Planne
     for (index, step) in app.restore.steps.iter().enumerate() {
         let (kind, detail) = match step {
             RestoreStep::RestoreFiles { source, target } => {
-                ("restore_files", format!("source \"{source}\" → {target}"))
+                let mapped = apply_path_map(target, path_map);
+                if mapped == *target {
+                    ("restore_files", format!("source \"{source}\" → {target}"))
+                } else {
+                    (
+                        "restore_files",
+                        format!("source \"{source}\" → {mapped} (mapped from {target})"),
+                    )
+                }
             }
             RestoreStep::RestoreDatabase {
                 database,
@@ -430,7 +477,16 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
     let app = config::load(&args.config)?;
     let state = State::load(&crate::backup::state_dir()?.join("state.json"))?;
     let snapshot = select_snapshot(&state, &app.name, &args.snapshot)?;
-    let plan = plan_steps(&app, snapshot)?;
+    // The cross-platform path map: configuration entries first, CLI
+    // entries appended (ties go to the later entry — the CLI).
+    let mut path_map: Vec<(String, String)> = app
+        .restore
+        .path_map
+        .iter()
+        .map(|entry| (entry.from.clone(), entry.to.clone()))
+        .collect();
+    path_map.extend(args.path_map.iter().cloned());
+    let plan = plan_steps(&app, snapshot, &path_map)?;
 
     if args.dry_run {
         if args.json {
@@ -516,7 +572,8 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
     }
 
     let (restored_files, restored_databases, restored_volumes) =
-        execute_steps(&app, &restored_root, None).map_err(|e| {
+        execute_steps(&app, &restored_root, None, &snapshot.source_manifest, &path_map)
+            .map_err(|e| {
             // The partial-restore guidance (ADR-007): promotion may have
             // stopped part-way. The never-overwrite contract means a
             // retry into this target would collide on what was already
@@ -586,19 +643,23 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
 
 /// Execute the definition's ordered restore procedure against a restored
 /// snapshot tree. With `rehearsal_root: None` the procedure promotes into
-/// its declared destinations (the live restore); with `Some(root)` the
-/// path targets are mirrored under the root — a scratch clone of the
-/// application layout for the L6 rehearsal, never the live paths.
-/// Wait-health steps run as declared in both modes (the rehearsal's
-/// endpoint is the operator's rehearsal environment).
+/// its declared destinations — translated by the cross-platform path map
+/// — (the live restore); with `Some(root)` the path targets are mirrored
+/// under the root — a scratch clone of the application layout for the L6
+/// rehearsal, never the live paths, and the map does NOT apply (the
+/// mirror represents the production layout). Wait-health steps run as
+/// declared in both modes (the rehearsal's endpoint is the operator's
+/// rehearsal environment).
 fn execute_steps(
     app: &Application,
     restored_root: &Path,
     rehearsal_root: Option<&Path>,
+    manifest: &SourceManifest,
+    path_map: &[(String, String)],
 ) -> Result<(u64, Vec<String>, u64)> {
     let remap_path = |target: &str| -> String {
         match rehearsal_root {
-            None => target.to_string(),
+            None => apply_path_map(target, path_map),
             Some(root) => {
                 // Mirror the absolute target under the root: strip the
                 // leading slashes AND a Windows drive prefix, so the join
@@ -660,11 +721,21 @@ fn execute_steps(
                 restored_databases.push(database.clone());
             }
             RestoreStep::RestoreVolume { volume } => {
-                let volume_path = crate::backup::resolve_volume_path(volume)?;
-                let target = remap_path(&volume_path.display().to_string());
-                let in_snapshot = restored_root.join(trim_root(&snapshot_path_of(
-                    &volume_path.display().to_string(),
-                )));
+                // The destination is the volume as the RESTORE host
+                // resolves it; the bytes themselves were captured at the
+                // path RECORDED in the snapshot's manifest (hosts
+                // differ). Snapshots recorded before the manifest path
+                // fall back to the restore host's resolution.
+                let resolved = crate::backup::resolve_volume_path(volume)?;
+                let resolved_path = resolved.path.display().to_string();
+                let recorded = manifest
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name == *volume)
+                    .and_then(|entry| entry.path.as_deref());
+                let source_form = recorded.unwrap_or(resolved_path.as_str());
+                let target = remap_path(&resolved_path);
+                let in_snapshot = restored_root.join(trim_root(&snapshot_path_of(source_form)));
                 let count = copy_tree_into(&in_snapshot, Path::new(&target))?;
                 info!(volume, files = count, "restored volume");
                 restored_volumes += count;
@@ -851,7 +922,22 @@ fn run_rehearsal(
     // promotion both live here, so rehearsals of different snapshots
     // never collide on the mirrored layout. The app checks run with this
     // directory as CWD and VAULTLINE_REHEARSAL_DIR.
-    let (files, databases, volumes) = execute_steps(app, &restored_root, Some(&run_dir))?;
+    // The rehearsal mirrors the PRODUCTION layout — the path map never
+    // applies there — but the manifest lookup does (volumes restore
+    // through their recorded capture path).
+    let rehearsal_path_map: Vec<(String, String)> = app
+        .restore
+        .path_map
+        .iter()
+        .map(|entry| (entry.from.clone(), entry.to.clone()))
+        .collect();
+    let (files, databases, volumes) = execute_steps(
+        app,
+        &restored_root,
+        Some(&run_dir),
+        &snapshot.source_manifest,
+        &rehearsal_path_map,
+    )?;
 
     let mut notes = vec![format!(
         "L6: rehearsed {} file(s), {} database(s), {} volume(s) under {}",
@@ -1554,15 +1640,37 @@ mod tests {
 
     #[test]
     fn snapshot_path_translation_windows_drive() {
-        #[cfg(windows)]
-        {
-            assert_eq!(snapshot_path_of("C:/Users/me/data"), "/C/Users/me/data");
-            assert_eq!(snapshot_path_of(r"C:\Users\me\data"), "/C/Users/me/data");
-        }
-        #[cfg(not(windows))]
-        {
-            assert_eq!(snapshot_path_of("/srv/app/data"), "/srv/app/data");
-        }
+        // The translation is platform-independent: a Windows-form path
+        // maps to the stored /C/... form on EVERY host, and a Unix path
+        // passes through — that is what lets a snapshot made on one OS
+        // be located on another.
+        assert_eq!(snapshot_path_of("C:/Users/me/data"), "/C/Users/me/data");
+        assert_eq!(snapshot_path_of(r"C:\Users\me\data"), "/C/Users/me/data");
+        assert_eq!(snapshot_path_of("/srv/app/data"), "/srv/app/data");
+    }
+
+    #[test]
+    fn path_map_longest_prefix_wins_and_later_entries_break_ties() {
+        let map = vec![
+            ("/srv".to_string(), "C:/srv".to_string()),
+            ("/srv/app".to_string(), "D:/app".to_string()),
+        ];
+        assert_eq!(apply_path_map("/srv/app/uploads", &map), "D:/app/uploads");
+        assert_eq!(apply_path_map("/srv/other", &map), "C:/srv/other");
+        assert_eq!(apply_path_map("/opt/x", &map), "/opt/x");
+
+        // Ties go to the LATER entry (CLI entries come last).
+        let tie = vec![
+            ("/srv".to_string(), "C:/srv".to_string()),
+            ("/srv".to_string(), "E:/srv".to_string()),
+        ];
+        assert_eq!(apply_path_map("/srv/app", &tie), "E:/srv/app");
+
+        // An exact match replaces the whole path; an empty map changes
+        // nothing.
+        let exact = vec![("/srv/app".to_string(), "F:/app".to_string())];
+        assert_eq!(apply_path_map("/srv/app", &exact), "F:/app");
+        assert_eq!(apply_path_map("/srv/app", &[]), "/srv/app");
     }
 
     #[test]
