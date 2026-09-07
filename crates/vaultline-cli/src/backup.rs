@@ -649,7 +649,7 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
                 return Err(VaultlineError::new(
                     ErrorKind::Operational,
                     format!(
-                        "the docker-reported mountpoint {} is not reachable from this host (Docker Desktop keeps volumes inside its VM) — declare the volume with capture = \"sidecar\" instead",
+                        "the docker-reported mountpoint {} is not reachable from this host (Docker Desktop keeps volumes inside its VM; on native hosts the docker-data directory may not be traversable by this user) — declare the volume with capture = \"sidecar\" instead",
                         path.display()
                     ),
                 ));

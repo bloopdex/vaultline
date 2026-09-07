@@ -24,13 +24,19 @@ happens instead / what would remove it.
 - **What is missing**: the named docker-volume proof exists
   (`named_docker_volume_direct_capture` — a real volume, data written
   through a throwaway container, captured via the resolved mountpoint
-  and verified in the repository) but is Unix-gated: on Windows/macOS
-  Desktop the volume's mountpoint lives inside the Docker VM, not on
-  the host, so the test cannot run locally.
-- **Why**: the proof executes on the hosted ubuntu job (native Linux
-  Docker keeps volumes on the host). The sidecar and pause-first
-  semantics ARE proven on Desktop (host-path volumes through real
-  containers — they are exactly the remedy for the mountpoint gap).
+  and verified in the repository) but is Unix-gated AND additionally
+  gated on the mountpoint being reachable from the test process: on
+  Windows/macOS Desktop the mountpoint lives inside the Docker VM, and
+  on standard CI runners the docker-data directory is untraversable
+  for the runner user (the daemon answers on its socket; the
+  filesystem does not — recorded from the first hosted run,
+  2026-09-07). The product aborts that case honestly, naming the
+  sidecar remedy.
+- **Why**: the proof runs wherever the mountpoint is visible; the
+  sidecar and pause-first semantics ARE proven everywhere else
+  (host-path volumes through real containers — they are exactly the
+  remedy for the mountpoint gap, and they ran green on the hosted
+  job).
 - **What happens instead**: direct/pause-first captures whose
   docker-reported mountpoint the host cannot reach abort with an error
   naming the sidecar remedy (the pre-flight's Desktop signature);
