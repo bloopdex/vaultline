@@ -542,9 +542,20 @@ level = 2
         .stdout(predicate::str::contains("verification L2"));
 
     // Corrupt the repository: truncate one pack file under data/.
+    // restic writes its packs mode 0444 (immutable by design) — on
+    // Unix a non-root write is refused, so the corruption step first
+    // makes the pack writable (Windows does not enforce read-only
+    // against the owner, which is why the suite never saw this until
+    // the first hosted run).
     let data_dir = repo.join("data");
     let pack = first_file_under(&data_dir).expect("a pack file exists");
     let full = std::fs::read(&pack).expect("pack bytes");
+    let mut perms = std::fs::metadata(&pack)
+        .expect("pack metadata")
+        .permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&pack, perms).expect("make the pack writable for the corruption step");
     std::fs::write(&pack, &full[..full.len() / 2]).expect("truncate the pack");
 
     // The next backup succeeds but its L2 check fails — the snapshot is
