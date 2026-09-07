@@ -1,0 +1,62 @@
+# cargo-deny configuration for Vaultline (SOT Section 13: dependency scanning
+# in CI for every project).
+#
+# Policy:
+# - advisories: everything in the RustSec database is denied (no ignores).
+# - licenses: the allow list below is exactly the set in use across the tree
+#   (checked 2026-09-07 with `cargo deny list`); adding a dependency that
+#   introduces a new license is a deliberate act that must update this list.
+# - bans: multiple versions are a warning (e.g. winnow 0.7/1.0 both in toml's
+#   tree) — nothing is banned yet; this is where future "do not use crate X"
+#   decisions land.
+# - sources: crates.io only, no git dependencies.
+
+[graph]
+targets = []
+all-features = false
+
+[advisories]
+ignore = []
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "CC0-1.0",
+    "MIT-0",
+    "OpenSSL",
+]
+exceptions = []
+
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

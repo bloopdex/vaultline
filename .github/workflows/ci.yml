@@ -1,0 +1,65 @@
+# Vaultline CI — two jobs on purpose (readability, one run per ref):
+#   build-test: the code gates (fmt / clippy / test) on ubuntu + windows
+#   verify:     the supply-chain gates (cargo vet / cargo deny) + workflow
+#               self-validation, ubuntu only
+# The container harness tests (tests/containers.rs) are #[ignore]d and never
+# run here: they require a Docker engine and arrive with the database-backup
+# phase. Hosted execution begins when the repository is hosted (the workflow
+# is validated locally by scripts/check-workflows.py).
+#
+# Trigger map: pushes to master and v* tags run the full gates; pull requests
+# run the same gates pre-merge.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (warnings denied)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+
+  verify:
+    name: supply chain & workflow validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo vet
+        run: |
+          cargo install cargo-vet --locked
+          cargo vet check --store-path supply-chain
+      - name: cargo deny
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
+      - name: Workflow self-validation
+        run: python scripts/check-workflows.py

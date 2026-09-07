@@ -1,0 +1,110 @@
+
+# cargo-vet audits file
+
+[[audits.chrono]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.4.45"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.clap]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.6.6"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.clap_builder]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.6.6"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.clap_derive]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.6.4"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.clap_lex]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.1.0"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.iana-time-zone]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.65"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.serde]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.229"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.serde_core]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.229"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.serde_derive]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.229"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.serde_json]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.151"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.serde_spanned]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.1.1"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.toml]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.9.12"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.toml_datetime]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.7.5"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.toml_parser]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.1.3"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.toml_writer]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.1.2"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.tracing]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.1.44"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.tracing-subscriber]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.3.23"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
+
+[[audits.winnow]]
+who = "Mohammed Rami Benhamida <bloop.dex@gmail.com>"
+criteria = "safe-to-deploy"
+version = "1.0.4"
+notes = "Phase 1 structural review 2026-09-07: no build.rs network access; no runtime networking; env access limited to terminal/color/locale detection; unsafe confined to parser/float/format internals; license files present"
