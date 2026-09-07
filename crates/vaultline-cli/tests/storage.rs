@@ -133,7 +133,7 @@ fn sftp_storage_backs_up_over_ssh() {
         return;
     }
     use testcontainers::GenericImage;
-    use testcontainers::core::{ImageExt, IntoContainerPort, WaitFor};
+    use testcontainers::core::{ImageExt, IntoContainerPort};
     use testcontainers::runners::SyncRunner as _;
 
     let Some(agent) = TestAgent::start() else {
@@ -174,10 +174,12 @@ fn sftp_storage_backs_up_over_ssh() {
         return;
     }
 
-    // The sshd container: user `backup`, chrooted home, key auth.
+    // The sshd container: user `backup`, chrooted home, key auth. No
+    // fixed wait-for: the entrypoint generates the host keys on first
+    // boot (ed25519 keygen outlasted the 60s startup wait on the first
+    // hosted run) — readiness is polled below instead.
     let image = GenericImage::new("atmoz/sftp", "alpine")
         .with_exposed_port(22.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("Server listening on"))
         .with_env_var("SFTP_USERS", "backup::123:123")
         .with_copy_to(
             "/home/backup/.ssh/keys/authorized_keys",
@@ -185,6 +187,19 @@ fn sftp_storage_backs_up_over_ssh() {
         );
     let node = image.start().expect("start sftp server");
     let port = node.get_host_port_ipv4(22).expect("mapped port");
+
+    // Readiness: poll the published port until sshd accepts connections
+    // (the host keys exist by then — keygen precedes sshd).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    loop {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("the sftp container never accepted connections on port {port}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+    }
 
     // restic verifies host keys: register the container's ephemeral key
     // (added temporarily; removed on drop).
