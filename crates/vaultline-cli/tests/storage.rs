@@ -242,7 +242,11 @@ kind = "sftp"
 host = "127.0.0.1"
 port = {port}
 user = "backup"
-path = "/"
+# The atmoz/sftp user is chrooted into its home with the chroot root
+# NOT writable — repositories live under the image's writable
+# `uploads` directory (verified: a repo at the root fails with
+# restic's "permission denied").
+path = "/uploads"
 password_env = "VAULTLINE_TEST_PASSWORD"
 [application.retention]
 keep_last = 14
@@ -264,7 +268,7 @@ level = 1
 
     // The repository genuinely lives on the sftp server: restic lists the
     // snapshot through the same sftp URL the product builds.
-    let repo_url = format!("sftp://backup@127.0.0.1:{port}//thornwa");
+    let repo_url = format!("sftp://backup@127.0.0.1:{port}//uploads/thornwa");
     let ls = Command::new(restic_bin().expect("restic"))
         .args(["-r", &repo_url, "--json", "snapshots"])
         .env("RESTIC_PASSWORD", "test-password")
