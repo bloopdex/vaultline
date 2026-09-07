@@ -76,33 +76,21 @@ impl Restic {
         })
     }
 
-    /// Probe the repository: return its snapshots, or `None` when the
-    /// repository does not exist yet (exit code 3).
-    pub fn snapshots(
+    /// Initialize the repository if it does not exist yet. `init` creates
+    /// the repository (and the bucket, for s3 backends); an existing
+    /// repository makes init fail with "already exists", which is treated
+    /// as success.
+    ///
+    /// Why init-first instead of probe-then-init (ADR-002 amendment):
+    /// probing a missing s3 repository hangs — restic retries a missing
+    /// bucket indefinitely ("Stat(<config/>) returned error, retrying"),
+    /// never returning the missing-repository exit code.
+    pub fn init_if_needed(
         &self,
         repo: &str,
         password: &str,
         extra_envs: &[(String, String)],
-    ) -> Result<Option<Vec<Value>>> {
-        let output = self
-            .command(password, extra_envs)
-            .arg("-r")
-            .arg(repo)
-            .args(["--json", "snapshots"])
-            .output()
-            .map_err(|e| self.spawn_error(e))?;
-        if let Some(code) = output.status.code()
-            && classify_failure(code, &output.stderr) == ResticFailure::RepoMissing
-        {
-            return Ok(None);
-        }
-        self.ensure_success(&output, password)?;
-        Ok(Some(parse_json_lines(&output.stdout)))
-    }
-
-    /// Initialize a new repository (idempotent at the caller's level: only
-    /// called after a probe found none).
-    pub fn init(&self, repo: &str, password: &str, extra_envs: &[(String, String)]) -> Result<()> {
+    ) -> Result<()> {
         let output = self
             .command(password, extra_envs)
             .arg("-r")
@@ -110,7 +98,22 @@ impl Restic {
             .arg("init")
             .output()
             .map_err(|e| self.spawn_error(e))?;
-        self.ensure_success(&output, password)
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr_text = String::from_utf8_lossy(&output.stderr);
+        if stderr_text.contains("already exists") {
+            return Ok(());
+        }
+        match output.status.code() {
+            Some(code) => {
+                Err(classify_failure(code, &output.stderr).into_error(password, &output.stderr))
+            }
+            None => Err(VaultlineError::new(
+                ErrorKind::Operational,
+                "restic was terminated by a signal",
+            )),
+        }
     }
 
     /// Run a backup: the given paths enter the repository, the given glob

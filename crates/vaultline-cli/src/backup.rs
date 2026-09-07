@@ -224,6 +224,52 @@ fn run_quiesce(name: &str, quiesce: &vaultline_core::model::Quiesce) -> Result<(
     Ok(())
 }
 
+/// Resolve a volume's capture path for direct semantics: a host path that
+/// exists is used as-is; otherwise the name is treated as a Docker volume
+/// and its mountpoint is resolved via `docker volume inspect` (the
+/// sidecar / pause-first semantics remain deferred).
+fn resolve_volume_path(name: &str) -> Result<PathBuf> {
+    let candidate = Path::new(name);
+    if candidate.exists() {
+        return Ok(candidate.to_path_buf());
+    }
+    info!(volume = name, "resolving docker volume mountpoint");
+    let output = Command::new("docker")
+        .args(["volume", "inspect", "--format", "{{.Mountpoint}}", name])
+        .output()
+        .map_err(|e| {
+            VaultlineError::with_source(
+                ErrorKind::Operational,
+                format!(
+                    "volume \"{name}\" is not an existing path and docker is not available to inspect it"
+                ),
+                e,
+            )
+        })?;
+    if !output.status.success() {
+        return Err(VaultlineError::new(
+            ErrorKind::Operational,
+            format!(
+                "volume \"{name}\" is neither an existing path nor a docker volume: {}",
+                String::from_utf8_lossy(&output.stderr)
+                    .lines()
+                    .rev()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
+        ));
+    }
+    let mountpoint = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if mountpoint.is_empty() {
+        return Err(VaultlineError::new(
+            ErrorKind::Operational,
+            format!("docker reported no mountpoint for volume \"{name}\""),
+        ));
+    }
+    Ok(PathBuf::from(mountpoint))
+}
+
 pub fn run_backup(args: BackupRunArgs) -> Result<()> {
     let app = config::load(&args.config)?;
 
@@ -303,42 +349,45 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
         }
     }
 
-    // Declared-but-not-captured honesty: databases and volumes.
-    let mut honesty_notes: Vec<String> = Vec::new();
-    if !app.databases.is_empty() {
-        let names: Vec<&str> = app.databases.iter().map(|d| d.name.as_str()).collect();
-        let note = format!(
-            "databases declared but not captured ({}): database capture is not implemented yet",
-            names.join(", ")
-        );
-        warn!(note, "database capture not implemented");
-        honesty_notes.push(note);
+    // Databases: capture each through its engine's consistency mechanism
+    // into a staging dump, then let the dumps enter this same backup run
+    // (one engine snapshot covers files + dumps — ADR-V0-3).
+    let mut database_metadata: Vec<vaultline_core::model::DatabaseSnapshotMeta> = Vec::new();
+    let mut _dump_staging: Vec<tempfile::TempDir> = Vec::new();
+    for db in &app.databases {
+        let capture = crate::database::capture_database(db)?;
+        backup_paths.push(capture.dump_path);
+        database_metadata.push(capture.meta);
+        _dump_staging.push(capture.staging);
+        reconstructs.push(db.name.clone());
     }
-    if !app.volumes.is_empty() {
-        let names: Vec<&str> = app.volumes.iter().map(|v| v.name.as_str()).collect();
-        let note = format!("volumes declared but not captured ({})", names.join(", "));
-        match app
-            .volumes
-            .iter()
-            .all(|v| v.capture == CaptureSemantics::Direct)
-        {
-            true => warn!(
-                note,
-                "volume capture not implemented (direct semantics are next)"
-            ),
-            false => warn!(note, "volume capture not implemented"),
+
+    // Volumes: direct semantics resolve to a path (host path or docker
+    // volume mountpoint) and join the same backup run.
+    let mut honesty_notes: Vec<String> = Vec::new();
+    for volume in &app.volumes {
+        match volume.capture {
+            CaptureSemantics::Direct => {
+                backup_paths.push(resolve_volume_path(&volume.name)?);
+                manifest_entries.push(SourceManifestEntry {
+                    name: volume.name.clone(),
+                    kind: "volume-direct".to_string(),
+                });
+                reconstructs.push(volume.name.clone());
+            }
+            CaptureSemantics::Sidecar | CaptureSemantics::PauseFirst => {
+                let note = format!(
+                    "volume \"{}\" declared but not captured ({:?} semantics not implemented yet)",
+                    volume.name, volume.capture
+                );
+                warn!(note, "volume capture semantics deferred");
+                honesty_notes.push(note);
+            }
         }
-        honesty_notes.push(note);
     }
 
     let started = Instant::now();
-    match restic.snapshots(&repo, &password, &extra_envs)? {
-        Some(_) => info!(repo, "repository exists"),
-        None => {
-            info!(repo, "repository does not exist — initializing");
-            restic.init(&repo, &password, &extra_envs)?;
-        }
-    }
+    restic.init_if_needed(&repo, &password, &extra_envs)?;
     let path_refs: Vec<&Path> = backup_paths.iter().map(|p| p.as_path()).collect();
     let summary = restic.backup(&repo, &password, &path_refs, &excludes, &extra_envs)?;
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -373,7 +422,7 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
         source_manifest: SourceManifest {
             entries: manifest_entries,
         },
-        database_metadata: Vec::new(),
+        database_metadata,
         configuration_metadata: ConfigMetadata {
             note: if honesty_notes.is_empty() {
                 "full capture declared".to_string()

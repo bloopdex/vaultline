@@ -4,6 +4,7 @@
 
 pub mod backup;
 pub mod cli;
+pub mod database;
 pub mod engine;
 pub mod logging;
 pub mod metrics;
