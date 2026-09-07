@@ -1063,7 +1063,12 @@ fn restore_database(
             let pg_restore = locate_tool("VAULTLINE_PGRESTORE", "pg_restore")?;
             let mut command = Command::new(&pg_restore);
             command.arg("--dbname").arg(&sanitized);
-            let auth = crate::database::PgPassfile::for_conninfo(&parsed)?;
+            // The passfile must match the connection pg_restore actually
+            // makes — the TARGET database (pgpass matches per database).
+            let auth = crate::database::PgPassfile::for_conninfo_targeting(
+                &parsed,
+                target_database.as_deref(),
+            )?;
             if let Some(passfile) = &auth {
                 command.env("PGPASSFILE", passfile.path());
             }

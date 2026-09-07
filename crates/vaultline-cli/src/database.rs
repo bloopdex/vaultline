@@ -304,8 +304,26 @@ pub struct PgPassfile {
 
 impl PgPassfile {
     /// Create the passfile for a parsed connection, or `None` for
-    /// passwordless (trust) connections.
+    /// passwordless (trust) connections. The entry's database field is
+    /// the connection's own database (the strict match a dump uses).
     pub fn for_conninfo(conn: &ConnInfo) -> Result<Option<Self>> {
+        Self::write(conn, None)
+    }
+
+    /// Create the passfile for a restore INTO a target database:
+    /// `target_dbname` (the `pg_restore --dbname`) becomes the entry's
+    /// database field — pgpass matches per database, and an entry with
+    /// the source database would send no password for the target
+    /// connection (found by the first hosted pg round trip, where the
+    /// Windows shim's PGPASSWORD extraction had masked it).
+    pub fn for_conninfo_targeting(
+        conn: &ConnInfo,
+        target_dbname: Option<&str>,
+    ) -> Result<Option<Self>> {
+        Self::write(conn, target_dbname)
+    }
+
+    fn write(conn: &ConnInfo, target_dbname: Option<&str>) -> Result<Option<Self>> {
         let Some(password) = &conn.password else {
             return Ok(None);
         };
@@ -331,7 +349,7 @@ impl PgPassfile {
             conn.port
                 .map(|p| p.to_string())
                 .unwrap_or_else(|| "*".to_string()),
-            conn.dbname.as_deref().unwrap_or("*"),
+            target_dbname.or(conn.dbname.as_deref()).unwrap_or("*"),
             conn.user.as_deref().unwrap_or("*"),
             password,
         );
@@ -553,6 +571,29 @@ mod tests {
         let info =
             parse_conninfo("postgresql://user:secret@db.example.com:5433/app").expect("parse");
         let auth = PgPassfile::for_conninfo(&info)
+            .expect("passfile")
+            .expect("password present");
+        let contents = std::fs::read_to_string(auth.path()).expect("read");
+        assert_eq!(contents, "db.example.com:5433:app:user:secret\n");
+    }
+
+    #[test]
+    fn passfile_targeting_writes_the_target_database_field() {
+        // pgpass matches per database — an entry carrying the SOURCE
+        // database sends no password when pg_restore connects to the
+        // TARGET database (the first-hosted-run pg round trip found
+        // exactly this, masked locally by the Windows shim's PGPASSWORD
+        // extraction).
+        let info =
+            parse_conninfo("postgresql://user:secret@db.example.com:5433/app").expect("parse");
+        let auth = PgPassfile::for_conninfo_targeting(&info, Some("app2"))
+            .expect("passfile")
+            .expect("password present");
+        let contents = std::fs::read_to_string(auth.path()).expect("read");
+        assert_eq!(contents, "db.example.com:5433:app2:user:secret\n");
+
+        // Without a target the entry keeps the connection's own database.
+        let auth = PgPassfile::for_conninfo_targeting(&info, None)
             .expect("passfile")
             .expect("password present");
         let contents = std::fs::read_to_string(auth.path()).expect("read");

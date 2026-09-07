@@ -901,7 +901,9 @@ restore_database = {{ database = "main", target_database = "test2" }}
     let db_url = if cfg!(windows) {
         format!("mysql://root@host.docker.internal:{port}/test")
     } else {
-        format!("mysql://root@localhost:{port}/test")
+        // 127.0.0.1, never localhost — see the postgresql round trip
+        // (the mysql client maps the name to the unix socket).
+        format!("mysql://root@127.0.0.1:{port}/test")
     };
     let contents = format!(
         "{base}\n[[application.databases]]\nname = \"main\"\nkind = \"mariadb\"\nurl_env = \"TEST_DATABASE_URL\"\nconsistency = {{ logical = {{ format = \"sql\" }} }}\n",
