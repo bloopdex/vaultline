@@ -902,10 +902,11 @@ restore_database = {{ database = "main", target_database = "test2" }}
         format!("mysql://root@host.docker.internal:{port}/test")
     } else {
         // The tools run INSIDE the server container (the exec shim
-        // below), where localhost is the server's own socket — unlike
-        // the mysql round trip, whose native host-side client needs
-        // 127.0.0.1.
-        format!("mysql://root@localhost:{port}/test")
+        // below), where localhost is the server itself and the port is
+        // the server's OWN 3306 — the host-mapped port belongs to the
+        // Windows shim's host-side connection (unlike the mysql round
+        // trip, whose native host-side client needs 127.0.0.1).
+        "mysql://root@localhost:3306/test".to_string()
     };
     let contents = format!(
         "{base}\n[[application.databases]]\nname = \"main\"\nkind = \"mariadb\"\nurl_env = \"TEST_DATABASE_URL\"\nconsistency = {{ logical = {{ format = \"sql\" }} }}\n",
