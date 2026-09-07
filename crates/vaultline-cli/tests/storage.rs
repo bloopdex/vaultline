@@ -173,42 +173,76 @@ fn sftp_storage_backs_up_over_ssh() {
     }
 
     // The sshd container: user `backup`, chrooted home, key auth. No
-    // fixed wait-for: the entrypoint generates the host keys on first
-    // boot (ed25519 keygen outlasted the 60s startup wait on the first
-    // hosted run) — readiness is polled below instead.
-    let image = GenericImage::new("atmoz/sftp", "alpine")
+    // The server is a plain ubuntu container the test configures
+    // itself — no image entrypoint magic. (The history that decided
+    // this: the atmoz/sftp image failed the hosted runs three
+    // different ways — a 60s startup timeout on its first-boot
+    // keygen, the runner's docker-proxy accepting TCP before sshd
+    // existed, and finally an opaque connection close with EMPTY
+    // server logs. A boring, deterministic server wins.)
+    let image = GenericImage::new("ubuntu", "24.04")
         .with_exposed_port(22.tcp())
-        .with_env_var("SFTP_USERS", "backup::123:123")
-        .with_copy_to(
-            "/home/backup/.ssh/keys/authorized_keys",
-            pubkey.clone().into_bytes(),
-        );
-    let node = image.start().expect("start sftp server");
+        .with_copy_to("/keys/authorized_keys", pubkey.clone().into_bytes());
+    let node = image.start().expect("start the server container");
     let port = node.get_host_port_ipv4(22).expect("mapped port");
+    let exec = |args: &[&str]| -> std::process::Output {
+        Command::new("docker")
+            .arg("exec")
+            .arg(node.id())
+            .args(args)
+            .output()
+            .expect("docker exec runs")
+    };
 
-    // Readiness: poll for the generated host key (keygen precedes sshd
-    // in the image's entrypoint). A TCP poll is NOT enough: the
-    // runner's docker port mapping accepts connections through its
-    // proxy before the container's sshd exists (the second hosted run
-    // broke on exactly that — connect succeeded, the key was not there
-    // yet).
+    // Configure sshd: the backup user with the test key, the host
+    // keys, and a writable uploads directory for repositories.
+    let setup = exec(&[
+        "sh",
+        "-c",
+        "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null 2>&1 \
+         && useradd -m backup \
+         && mkdir -p /home/backup/.ssh /home/backup/uploads \
+         && cp /keys/authorized_keys /home/backup/.ssh/authorized_keys \
+         && chown -R backup:backup /home/backup \
+         && chmod 700 /home/backup/.ssh \
+         && chmod 600 /home/backup/.ssh/authorized_keys \
+         && ssh-keygen -A \
+         && echo SERVER-CONFIGURED",
+    ]);
+    assert!(
+        setup.status.success()
+            && String::from_utf8_lossy(&setup.stdout).contains("SERVER-CONFIGURED"),
+        "the server configuration failed: {} {}",
+        String::from_utf8_lossy(&setup.stdout),
+        String::from_utf8_lossy(&setup.stderr)
+    );
+
+    // Start sshd detached (the container's own bash stays PID 1).
+    let sshd = exec(&[
+        "sh",
+        "-c",
+        "nohup /usr/sbin/sshd -D -e >/var/log/sshd.log 2>&1 &",
+    ]);
+    assert!(
+        sshd.status.success(),
+        "cannot start sshd: {}",
+        String::from_utf8_lossy(&sshd.stderr)
+    );
+
+    // Readiness: the sshd PROCESS, not the TCP port (the runner's
+    // docker-proxy accepts connections before any listener exists).
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     loop {
-        let ready = Command::new("docker")
-            .args([
-                "exec",
-                node.id(),
-                "sh",
-                "-c",
-                "test -f /etc/ssh/ssh_host_ed25519_key.pub",
-            ])
-            .status()
-            .is_ok_and(|status| status.success());
-        if ready {
+        let ready = exec(&["sh", "-c", "pgrep -x sshd >/dev/null"]);
+        if ready.status.success() {
             break;
         }
         if std::time::Instant::now() > deadline {
-            panic!("the sftp container never generated its host keys");
+            let log = exec(&["sh", "-c", "cat /var/log/sshd.log 2>/dev/null"]);
+            panic!(
+                "sshd never started in the server container: {}",
+                String::from_utf8_lossy(&log.stdout)
+            );
         }
         std::thread::sleep(std::time::Duration::from_millis(1000));
     }
@@ -273,11 +307,9 @@ kind = "sftp"
 host = "127.0.0.1"
 port = {port}
 user = "backup"
-# The atmoz/sftp user is chrooted into its home with the chroot root
-# NOT writable — repositories live under the image's writable
-# `uploads` directory (verified: a repo at the root fails with
-# restic's "permission denied").
-path = "/uploads"
+# The repository directory on the server (created in the setup step,
+# owned by the backup user).
+path = "/home/backup/uploads"
 password_env = "VAULTLINE_TEST_PASSWORD"
 [application.retention]
 keep_last = 14
@@ -289,7 +321,7 @@ level = 1
     std::fs::write(&config_path, config).expect("config");
 
     // On failure, dump the server's own view before asserting — a
-    // connection reset during auth is otherwise opaque.
+    // connection close during auth is otherwise opaque.
     let backup = vaultline()
         .args(["backup", "run", "--config"])
         .arg(&config_path)
@@ -298,14 +330,11 @@ level = 1
         .output()
         .expect("vaultline runs");
     if !backup.status.success() {
-        let logs = Command::new("docker")
-            .args(["logs", "--tail", "40", node.id()])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_default();
+        let logs = exec(&["sh", "-c", "cat /var/log/sshd.log 2>/dev/null"]);
         panic!(
-            "backup failed: {}\n--- sftp server logs (tail):\n{logs}",
-            String::from_utf8_lossy(&backup.stderr)
+            "backup failed: {}\n--- sshd log (tail):\n{}",
+            String::from_utf8_lossy(&backup.stderr),
+            String::from_utf8_lossy(&logs.stdout)
         );
     }
     assert!(
@@ -316,7 +345,7 @@ level = 1
 
     // The repository genuinely lives on the sftp server: restic lists the
     // snapshot through the same sftp URL the product builds.
-    let repo_url = format!("sftp://backup@127.0.0.1:{port}//uploads/thornwa");
+    let repo_url = format!("sftp://backup@127.0.0.1:{port}//home/backup/uploads/thornwa");
     let ls = Command::new(restic_bin().expect("restic"))
         .args(["-r", &repo_url, "--json", "snapshots"])
         .env("RESTIC_PASSWORD", "test-password")
