@@ -9,8 +9,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
-use predicates::prelude::*;
-
 fn restic_bin() -> Option<PathBuf> {
     if let Some(bin) = std::env::var_os("VAULTLINE_RESTIC_BIN") {
         let path = PathBuf::from(bin);
@@ -183,7 +181,7 @@ fn sftp_storage_backs_up_over_ssh() {
         .with_env_var("SFTP_USERS", "backup::123:123")
         .with_copy_to(
             "/home/backup/.ssh/keys/authorized_keys",
-            pubkey.into_bytes(),
+            pubkey.clone().into_bytes(),
         );
     let node = image.start().expect("start sftp server");
     let port = node.get_host_port_ipv4(22).expect("mapped port");
@@ -238,6 +236,25 @@ fn sftp_storage_backs_up_over_ssh() {
         return;
     };
 
+    // The image's entrypoint must have moved the test key from the
+    // queued keys dir into the server's authorized_keys (chown + chmod
+    // 600). Asserting it here turns any setup difference into a clear
+    // failure instead of a connection reset later.
+    let server_keys = Command::new("docker")
+        .args([
+            "exec",
+            node.id(),
+            "cat",
+            "/home/backup/.ssh/authorized_keys",
+        ])
+        .output()
+        .expect("docker exec");
+    let server_keys = String::from_utf8_lossy(&server_keys.stdout);
+    assert!(
+        server_keys.contains(pubkey.trim()),
+        "the server's authorized_keys does not hold the test key: {server_keys}"
+    );
+
     let uploads = dir.path().join("uploads");
     std::fs::create_dir_all(&uploads).expect("uploads");
     std::fs::write(uploads.join("payload.txt"), "over ssh").expect("payload");
@@ -271,14 +288,31 @@ level = 1
     );
     std::fs::write(&config_path, config).expect("config");
 
-    vaultline()
+    // On failure, dump the server's own view before asserting — a
+    // connection reset during auth is otherwise opaque.
+    let backup = vaultline()
         .args(["backup", "run", "--config"])
         .arg(&config_path)
         .env("VAULTLINE_TEST_PASSWORD", "test-password")
         .env("VAULTLINE_STATE_DIR", dir.path().join("state"))
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("backup complete"));
+        .output()
+        .expect("vaultline runs");
+    if !backup.status.success() {
+        let logs = Command::new("docker")
+            .args(["logs", "--tail", "40", node.id()])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        panic!(
+            "backup failed: {}\n--- sftp server logs (tail):\n{logs}",
+            String::from_utf8_lossy(&backup.stderr)
+        );
+    }
+    assert!(
+        String::from_utf8_lossy(&backup.stdout).contains("backup complete"),
+        "{}",
+        String::from_utf8_lossy(&backup.stdout)
+    );
 
     // The repository genuinely lives on the sftp server: restic lists the
     // snapshot through the same sftp URL the product builds.
