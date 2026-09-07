@@ -2,8 +2,11 @@
 //! VPSes. The command surface, logging, and dispatch live here; the recovery
 //! model and configuration validation live in `vaultline-core`.
 
+pub mod backup;
 pub mod cli;
+pub mod engine;
 pub mod logging;
+pub mod metrics;
 pub mod template;
 
 pub use vaultline_core::error::{ErrorKind, VaultlineError};
@@ -27,5 +30,9 @@ fn dispatch(cli: cli::Cli) -> Result<(), VaultlineError> {
     match cli.command {
         cli::Command::Init(args) => cli::run_init(args),
         cli::Command::Validate(args) => cli::run_validate(args),
+        cli::Command::Backup(args) => match args.command {
+            cli::BackupCommand::Run(args) => backup::run_backup(args),
+            cli::BackupCommand::List(args) => backup::run_list(args),
+        },
     }
 }

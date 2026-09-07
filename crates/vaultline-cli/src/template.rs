@@ -49,7 +49,8 @@ note = "secrets — reference only"
 # WHERE the snapshot repository lives (ADR-V0-4). Credentials are env-var
 # names, never literals. Other backends: kind = "s3" (endpoint, bucket,
 # access_key_env, secret_key_env) or kind = "sftp" (host, port, user,
-# key_file, known_hosts).
+# path — the remote repository directory; key_file/known_hosts are
+# declared but not wired yet: ssh-agent and ~/.ssh/config work today).
 [application.storage]
 kind = "local"
 path = "/var/backups/{name}"

@@ -49,6 +49,22 @@ pub enum Command {
     Init(InitArgs),
     /// Validate a vaultline.toml and report every problem.
     Validate(ValidateArgs),
+    /// Back up an application and inspect its recorded snapshots.
+    Backup(BackupArgs),
+}
+
+#[derive(clap::Args)]
+pub struct BackupArgs {
+    #[command(subcommand)]
+    pub command: BackupCommand,
+}
+
+#[derive(Subcommand)]
+pub enum BackupCommand {
+    /// Execute the recovery definition: capture the sources, record the snapshot.
+    Run(crate::backup::BackupRunArgs),
+    /// List the snapshots recorded for this application.
+    List(crate::backup::BackupListArgs),
 }
 
 #[derive(clap::Args)]
