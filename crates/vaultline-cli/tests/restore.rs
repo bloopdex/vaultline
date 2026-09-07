@@ -901,27 +901,44 @@ restore_database = {{ database = "main", target_database = "test2" }}
     let db_url = if cfg!(windows) {
         format!("mysql://root@host.docker.internal:{port}/test")
     } else {
-        // 127.0.0.1, never localhost — see the postgresql round trip
-        // (the mysql client maps the name to the unix socket).
-        format!("mysql://root@127.0.0.1:{port}/test")
+        // The tools run INSIDE the server container (the exec shim
+        // below), where localhost is the server's own socket — unlike
+        // the mysql round trip, whose native host-side client needs
+        // 127.0.0.1.
+        format!("mysql://root@localhost:{port}/test")
     };
     let contents = format!(
         "{base}\n[[application.databases]]\nname = \"main\"\nkind = \"mariadb\"\nurl_env = \"TEST_DATABASE_URL\"\nconsistency = {{ logical = {{ format = \"sql\" }} }}\n",
     );
     std::fs::write(&fixture.config, contents).expect("config");
 
-    // On Windows the tools run inside the mariadb image via shims. The
-    // mariadb:11.3 image renamed its tools (recorded: `mysqldump` is not
-    // found — the names are `mariadb-dump` and `mariadb`).
+    // The dump MUST come from the server's own tool: the first hosted
+    // run showed the host-side MySQL-client mysqldump querying
+    // information_schema.COLUMN_STATISTICS, which MariaDB does not have.
+    // Windows shims docker-run the mariadb image; Unix shims docker-exec
+    // the already-running server container (where the socket exists and
+    // stdin flows through -i). The mariadb:11.3 image renamed its tools
+    // (recorded: `mysqldump` is not found — the names are
+    // `mariadb-dump` and `mariadb`).
     let shim = |name: &str, tool: &str| -> PathBuf {
         let path = fixture._dir.path().join(name);
-        std::fs::write(
-            &path,
+        let script = if cfg!(windows) {
             format!(
                 "@echo off\r\ndocker run --rm -i -e MYSQL_PWD=%MYSQL_PWD% mariadb:11.3 {tool} %*\r\n"
-            ),
-        )
-        .expect("shim");
+            )
+        } else {
+            format!(
+                "#!/bin/sh\nexec docker exec -i {} {tool} \"$@\"\n",
+                node.id()
+            )
+        };
+        std::fs::write(&path, script).expect("shim");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod shim");
+        }
         path
     };
 
@@ -931,10 +948,18 @@ restore_database = {{ database = "main", target_database = "test2" }}
         .arg(&fixture.config)
         .env("VAULTLINE_TEST_PASSWORD", "test-password")
         .env("VAULTLINE_STATE_DIR", fixture.state_dir())
-        .env("TEST_DATABASE_URL", &db_url);
-    if cfg!(windows) {
-        backup_cmd.env("VAULTLINE_MYSQLDUMP", shim("mysqldump.cmd", "mariadb-dump"));
-    }
+        .env("TEST_DATABASE_URL", &db_url)
+        .env(
+            "VAULTLINE_MYSQLDUMP",
+            shim(
+                if cfg!(windows) {
+                    "mysqldump.cmd"
+                } else {
+                    "mysqldump"
+                },
+                "mariadb-dump",
+            ),
+        );
     backup_cmd.assert().success();
 
     let mut restore_cmd = vaultline();
@@ -945,10 +970,11 @@ restore_database = {{ database = "main", target_database = "test2" }}
         .arg(&fixture.restore_target)
         .env("VAULTLINE_TEST_PASSWORD", "test-password")
         .env("VAULTLINE_STATE_DIR", fixture.state_dir())
-        .env("TEST_DATABASE_URL", &db_url);
-    if cfg!(windows) {
-        restore_cmd.env("VAULTLINE_MYSQL", shim("mysql.cmd", "mariadb"));
-    }
+        .env("TEST_DATABASE_URL", &db_url)
+        .env(
+            "VAULTLINE_MYSQL",
+            shim(if cfg!(windows) { "mysql.cmd" } else { "mysql" }, "mariadb"),
+        );
     restore_cmd
         .assert()
         .success()
