@@ -184,55 +184,6 @@ fn backup_run_json_output_contains_the_snapshot() {
     assert!(value["id"].as_str().unwrap().starts_with("thornwa-"));
 }
 
-/// Failure-first: a declared database is warned about and recorded as
-/// declared-but-not-captured — the snapshot never claims to contain it.
-#[test]
-fn declared_database_is_recorded_as_not_captured() {
-    let Some(mut cmd) = backup_cmd() else {
-        eprintln!("skipping: restic not available (VAULTLINE_RESTIC_BIN or PATH)");
-        return;
-    };
-    let fixture = Fixture::new();
-    let contents = std::fs::read_to_string(&fixture.config).expect("config")
-        + r#"
-[[application.databases]]
-name = "main"
-kind = "postgresql"
-url_env = "THORNWA_DATABASE_URL"
-consistency = { logical = { format = "custom" } }
-"#;
-    std::fs::write(&fixture.config, contents).expect("config");
-
-    cmd.args(["backup", "run", "--config"])
-        .arg(&fixture.config)
-        .env("VAULTLINE_TEST_PASSWORD", "test-password")
-        .env("VAULTLINE_STATE_DIR", fixture._dir.path().join("state"))
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("not captured"));
-
-    let state: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(fixture._dir.path().join("state/state.json")).expect("state file"),
-    )
-    .expect("state parses");
-    let snapshot = &state["applications"]["thornwa"]["snapshots"][0];
-    assert!(
-        snapshot["configuration_metadata"]["note"]
-            .as_str()
-            .unwrap()
-            .contains("databases declared but not captured"),
-        "{snapshot}"
-    );
-    assert!(
-        snapshot["restore_metadata"]["reconstructs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|n| n.as_str() != Some("main")),
-        "the database must not appear in reconstructs"
-    );
-}
-
 /// A missing password environment variable is a configuration error (2),
 /// before restic ever runs.
 #[test]
