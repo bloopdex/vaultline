@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.5.0 — 2026-09-07
+
+Operations and scheduling — the backup runs itself, and retention
+explains itself:
+
+- **`vaultline backup prune`** enforces the retention policy with
+  **per-snapshot explanations**: every decision prints with its reasons
+  ("among the 14 most recent snapshots (keep_last)", "newest snapshot of
+  2026-09-07 (keep_daily)", …). Dry-run by default — without `--apply`
+  nothing changes. `--apply` forgets only recorded ids the engine still
+  holds (cross-checked first, never blind), runs `restic prune`, and
+  records the outcome in the state file (snapshots stay immutable; the
+  operations record notes what was forgotten and when). Idempotent by
+  construction and by test.
+- **`vaultline schedule run`** — the due-ness executor: runs the backup
+  and/or verification the definition's crons make due and explains what
+  ran and why. Bookkeeping is recorded (a failing verification does not
+  hot-loop; the attempt time is recorded before the run).
+- **`vaultline doctor`** — environment checks (config, restic, dump
+  tools, state file, storage connectivity) as ok/warning/error with
+  details; exit 0 only when nothing errored.
+- **`vaultline status`** — the application summary: snapshots, levels
+  reached vs policy, next schedule occurrences, retention projection,
+  prune history.
+- **`vaultline timer generate|install`** — the systemd story: one
+  service+timer pair per declared schedule with the cron translated to
+  `OnCalendar` (Persistent=true). `install` is Linux-only, daemon-reloads,
+  enables, and never starts (starting is an explicit `--now`).
+- **Schedules are part of the definition**: `application.schedule`
+  (backups) joins `verification.schedule`; both are 5-field cron,
+  validated at configuration time.
+- **The cron dependency decision by evidence** (ADR-005): the audited
+  `cron` crate, with three recorded behavioral findings — it requires
+  6/7 fields (5-field input is rejected outright; the wrapper prepends
+  the fixed second), its day-of-week range is 1..=7 with Sunday=1 (0 is
+  rejected), and both-restricted day fields AND rather than OR (standard
+  cron ORs; systemd ORs) — so both-restricted day fields are rejected at
+  validation rather than scheduled ambiguously. Crate + phf/rand/
+  siphasher dependencies audited (94 crates certified).
+- Metrics: prune_runs, prune_snapshots_kept, prune_snapshots_forgotten,
+  schedule_runs, schedule_backups_due_run, schedule_verifications_due_run.
+- **138 tests passing** (retention-plan fixtures, cron evaluation and
+  OnCalendar translation, due-ness, unit-content generation, and 10
+  real-restic operations integration tests including prune dry-run /
+  apply / idempotence and the schedule executor).
+- Docs updated; limitations narrowed (the scheduling and prune
+  limitations are delivered; L6 rehearsal automation and app_checks
+  remain).
+
 ## 0.4.0 — 2026-09-07
 
 Restore and verification — the restore-first promise is executable:

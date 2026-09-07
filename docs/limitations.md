@@ -68,30 +68,21 @@ happens instead / what would remove it.
 - **What would remove it**: MinIO and SFTP testcontainers in the
   container harness.
 
-## Verification scheduling and L6 automation are not executed
+## L6 rehearsal automation and app checks are not executed
 
-- **What is missing**: `verification.schedule` and
-  `verification.app_checks` are recorded but not executed; the full L6
-  recovery test has no scheduler (it is exercised manually through
-  `vaultline restore --verify`, and the disaster scenario is pinned by
-  the integration suite).
-- **Why**: scheduling is the operations phase; L6 rehearsal requires a
-  scratch application environment. L1–L4 and SQLite L5 execute on
-  demand (`backup verify`, `restore --verify`).
+- **What is missing**: `verification.app_checks` is recorded but not
+  executed, and the full L6 recovery test has no scheduled rehearsal —
+  it is exercised manually through `vaultline restore --verify`, and
+  the disaster scenario is pinned by the integration suite.
+- **Why**: L6 rehearsal requires a scratch application environment
+  (hosts, DNS, external dependencies) that a backup tool cannot assume;
+  app checks are per-application semantics. Scheduling itself arrived
+  in Phase 5 (`schedule run`, systemd timers) and executes L1–L5.
 - **What happens instead**: every snapshot records the level actually
-  reached; `backup verify` updates it durably.
-- **What would remove it**: the scheduling integration (systemd timer).
-
-## Retention and prune are declared, not executed
-
-- **What is missing**: the retention policy is validated but no `prune`
-  command exists — nothing deletes snapshots.
-- **Why**: retention explainability (per-snapshot keep/delete reasons)
-  is the operations phase; the safe default is to keep everything.
-- **What happens instead**: snapshots accumulate; the policy is carried
-  in every snapshot's definition so future pruning is well-defined.
-- **What would remove it**: the `prune` command with per-snapshot
-  retention explanations.
+  reached; `backup verify` and `restore --verify` raise it durably;
+  the verification schedule runs them on time.
+- **What would remove it**: a rehearsal-environment contract (Phase 6)
+  and the per-engine app-check executors.
 
 ## Cross-platform restore is not supported
 

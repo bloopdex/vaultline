@@ -17,7 +17,7 @@ degrading*.
 ## Named metrics
 
 One structured stderr event per metric (target `vaultline.metrics`).
-Emitted today, by `backup run`:
+Emitted today:
 
 | Metric | Meaning |
 |---|---|
@@ -30,10 +30,12 @@ Emitted today, by `backup run`:
 | `restore_rehearsals_run` | 1 per completed restore or verification rehearsal |
 | `restore_rehearsal_failures` | 1 when a rehearsal's verification fails |
 | `restore_duration_ms` | wall time of a restore |
+| `prune_runs` | 1 per prune invocation (dry-run included) |
+| `prune_snapshots_kept` | snapshots the retention plan kept |
+| `prune_snapshots_forgotten` | snapshots the retention plan would forget (the plan count; the applied count is in the state record) |
+| `schedule_runs` | 1 per `schedule run` invocation that found work |
+| `schedule_backups_due_run` | 1 per backup launched by the schedule executor |
+| `schedule_verifications_due_run` | 1 per verification launched by the schedule executor |
 
-Designed for the phases that produce them (names stable, not yet
-emitted):
-
-| Metric | Meaning |
-|---|---|
-| `prune_kept` / `prune_deleted` | snapshots retained / deleted by a prune, with the per-snapshot reason recorded in the log |
+The per-snapshot retention reasons themselves are command output and the
+state record, not metrics — explanations are data, not counters.

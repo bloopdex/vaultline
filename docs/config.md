@@ -10,6 +10,8 @@ The annotated example (also what `vaultline init` writes):
 [application]
 name = "thornwa"                # the application-name rule, below
 description = "What this application is"
+# schedule = "30 2 * * *"       # backup schedule: 5-field cron
+#                                (minute hour day-of-month month day-of-week)
 
 # --- sources -----------------------------------------------------------
 [[application.sources.files]]
@@ -66,7 +68,7 @@ keep_yearly = 1
 # --- verification (ADR-003) ---------------------------------------------
 [application.verification]
 level = 3                       # 1..=6, the levels L1..L6
-# schedule = "0 3 * * 7"        # recorded; execution arrives with scheduling
+# schedule = "0 3 * * 1"        # verification schedule: 5-field cron
 # app_checks = ["pg-integrity"] # recorded; execution arrives with app checks
 
 # --- the ordered restore procedure --------------------------------------
@@ -100,8 +102,16 @@ with an alphanumeric (`thornwa`, `thorn-wa2`; not `Thornwa`, `-thornwa`,
 - retention: at least one keep count non-zero (an all-zero policy would
   delete everything on the first prune)
 - verification level 1–6
+- schedules: `application.schedule` and `application.verification.schedule`
+  are 5-field cron expressions (minute hour day-of-month month
+  day-of-week). Rejected: a different field count, invalid syntax, and
+  both day fields restricted at once — the evaluation semantics differ
+  between cron implementations (the engine ANDs them; systemd timers OR
+  them), so the same definition could fire at different times (ADR-005)
 - every restore-step reference resolves to a declared source / database /
   volume name
 - warnings (non-blocking): relative source paths (they resolve on the
-  target host, not locally); `schedule` and `app_checks` are recorded but
-  not yet executed
+  target host, not locally); `app_checks` are recorded but not yet
+  executed; a schedule the cron engine accepts but OnCalendar cannot
+  express (`vaultline timer generate` will refuse it — `vaultline
+  schedule run` still works)

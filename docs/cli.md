@@ -10,8 +10,16 @@ vaultline backup list   list the snapshots recorded for this application
 vaultline backup verify prove a snapshot against the policy (L3/L4/L5) and
                         record the level actually reached
 vaultline backup inspect show a snapshot's full record
+vaultline backup prune  enforce retention: per-snapshot keep/forget decisions
+                        with reasons; dry-run unless --apply
 vaultline restore       execute the definition's restore procedure
                         (sandbox-then-promote, never overwrites)
+vaultline schedule run  run whatever the definition's schedules make due
+vaultline doctor        check the environment (tools, state, storage)
+vaultline status        summarize one application's records and schedules
+vaultline timer generate write the systemd service/timer unit files
+vaultline timer install   install the units into /etc/systemd/system
+                          (Linux only; enables without starting)
 vaultline --version
 ```
 
@@ -141,6 +149,78 @@ Executes the definition's ordered restore procedure for the snapshot:
 The default target is `./vaultline-restore` — never the live paths
 unless the procedure declares them. `--dry-run` prints the plan and
 writes nothing.
+
+### `vaultline backup prune`
+
+```
+vaultline backup prune [--config <path>] [--apply] [--json]
+```
+
+Enforces the retention policy with per-snapshot explanations
+(ADR-005): every recorded snapshot prints KEEP or FORGET with its
+reasons ("among the N most recent snapshots (keep_last)", "newest
+snapshot of YYYY-MM-DD (keep_daily)", …, or "matched no retention
+rule"). **Dry-run by default** — without `--apply` nothing changes.
+
+`--apply` cross-checks the engine first (only ids the engine still
+holds are forgotten — never blind), runs `restic forget` for them and
+then `restic prune` (the engine's own defaults govern repack), and
+records the outcome in the state file. Re-running after an applied
+prune forgets nothing more (idempotent). Snapshot records are never
+rewritten — pruning appends to the operations record.
+
+### `vaultline schedule run`
+
+```
+vaultline schedule run [--config <path>] [--json]
+```
+
+The portable due-ness executor (ADR-005) — for hosts without systemd,
+or for exercising the same logic the timers express. A job is due when
+its cron has an occurrence strictly after the job's last run that has
+already arrived ("never ran" is due immediately); the anchors are the
+newest snapshot timestamp (backups) and `operations.last_verify_at`
+(verification). Runs the due jobs and explains what ran and why. The
+verification attempt time is recorded before the run — a failing
+verification does not hot-loop on every invocation.
+
+### `vaultline doctor` / `vaultline status`
+
+```
+vaultline doctor [--config <path>] [--json]
+vaultline status [--config <path>] [--json]
+```
+
+`doctor` checks the environment — configuration, restic, the dump tools
+the definition needs (one check per engine kind), the state file, and
+storage connectivity (a warning when the password environment variable
+is unset) — each as ok/warning/error with details. Exit 0 only when
+nothing errored. `status` summarizes one application: recorded/pruned
+snapshots, levels reached vs policy, next schedule occurrences, the
+retention projection, and the prune history. Neither mutates anything.
+
+### `vaultline timer generate` / `vaultline timer install`
+
+```
+vaultline timer generate [--config <path>] [--out DIR]
+vaultline timer install [--config <path>] [--now]
+```
+
+`generate` writes the unit files (any platform; default output
+directory `./vaultline-systemd`, regeneration overwrites — they are
+derived artifacts): one service+timer pair per declared schedule —
+`vaultline-<app>.timer` runs `backup run` from `application.schedule`,
+`vaultline-<app>-verify.timer` runs `backup verify latest` from
+`verification.schedule` — each with the cron translated to
+`OnCalendar` and `Persistent=true` (a run missed while the host was
+down is caught up). A definition with no schedules generates nothing
+and errors. A schedule the cron engine accepts but OnCalendar cannot
+express is refused with a clear error (validation warns about it up
+front).
+
+`install` writes the units into `/etc/systemd/system`, daemon-reloads,
+and enables the timers — Linux only, and it never starts them; start
+is an explicit `--now`.
 
 ## Global flags
 

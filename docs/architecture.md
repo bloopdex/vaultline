@@ -13,8 +13,8 @@ crates/vaultline-cli    the binary: command surface, logging, dispatch
 Dependency direction is inward: `vaultline-core` contains no engine
 behavior and no process I/O beyond reading the configuration file;
 `vaultline-cli` depends on `vaultline-core`, never the reverse. restic
-orchestration (ADR-002) is a CLI-layer concern that does not exist yet —
-when it lands, it lands behind the adapter boundary, not inside the model.
+orchestration (ADR-002) lives behind the engine adapter boundary in the
+CLI layer, never inside the model.
 
 ## The canonical model
 
@@ -94,9 +94,24 @@ policy — L3 engine cross-check, L4 recursive content comparison against
 live files, L5 SQLite rehearsal — and records the level actually
 reached durably in the state file.
 
+## The operations executors (implemented)
+
+`vaultline-core::cron` wraps the audited `cron` crate (ADR-005): the
+5-field schedule contract, validation, next-occurrence computation, and
+OnCalendar translation. `vaultline-core::retention` computes the
+deterministic keep/forget plan over recorded snapshots — every decision
+carries its reasons. `vaultline-cli::prune` applies the plan (dry-run by
+default; engine cross-check before any `forget`; outcome recorded).
+`vaultline-cli::schedule` is the due-ness executor (anchors in the
+operations record). `vaultline-cli::ops` is `doctor`/`status` (read-only
+diagnosis). `vaultline-cli::timer` generates the systemd units
+(service+timer per declared schedule, cron → OnCalendar, Persistent).
+
 ## State
 
 Plain files, per ADR-003: `state.json` (schema version 1) records
-snapshots per application; a `lock` file (create-new semantics) refuses
+snapshots per application plus the operations bookkeeping (verification
+schedule runs, applied prunes — additive optional fields, so the
+version stays 1); a `lock` file (create-new semantics) refuses
 concurrent runs. Embedded SQLite remains off the table until evidence
 demands it.

@@ -77,6 +77,23 @@ threat → boundary → defense → status.
 - **Boundary**: the verification policy.
 - **Defense**: the tiered verification levels L1–L6 (ADR-003) — engine
   integrity checks, restore rehearsal, and the full disaster-recovery
-  test — with `doctor` reporting the last-known level per snapshot.
-- **Status**: the levels are the product's core model; execution arrives
-  with verification.
+  test — with `doctor`/`status` reporting the last-known level per
+  snapshot and the verification schedule executing it.
+- **Status**: enforced — L1–L5 execute on demand and on schedule, the
+  reached level is recorded durably, and the disaster scenario is
+  pinned by tests.
+
+## Destructive actions (prune)
+
+- **Threat**: retention deletes the wrong snapshots (misconfigured
+  policy, a bug in the bucket computation) and the data is gone.
+- **Boundary**: `vaultline backup prune`.
+- **Defense**: safe by default — without `--apply` nothing changes, and
+  every decision prints with its reasons for human review first. With
+  `--apply`: only snapshots the state file records are ever considered;
+  the engine listing is cross-checked before any `forget` (an id the
+  engine no longer holds is noted, never blindly sent); snapshot
+  records are never rewritten — the outcome is appended to the
+  operations record, so what was deleted and why stays auditable.
+- **Status**: enforced and integration-tested (dry-run purity, applied
+  idempotence, the recorded outcome).
