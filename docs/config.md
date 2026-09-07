@@ -69,7 +69,14 @@ keep_yearly = 1
 [application.verification]
 level = 3                       # 1..=6, the levels L1..L6
 # schedule = "0 3 * * 1"        # verification schedule: 5-field cron
-# app_checks = ["pg-integrity"] # recorded; execution arrives with app checks
+
+# [[application.verification.app_checks]]   # executable checks (ADR-006)
+# name = "pg-integrity"
+# command = "psql"              # shell-free argv — never a shell string
+# args = ["-c", "SELECT 1"]
+
+# [application.rehearsal]       # REQUIRED when level = 6 (the L6
+# target = "/srv/rehearsal"     # recovery rehearsal's scratch root)
 
 # --- the ordered restore procedure --------------------------------------
 [[application.restore.steps]]
@@ -108,10 +115,12 @@ with an alphanumeric (`thornwa`, `thorn-wa2`; not `Thornwa`, `-thornwa`,
   both day fields restricted at once — the evaluation semantics differ
   between cron implementations (the engine ANDs them; systemd timers OR
   them), so the same definition could fire at different times (ADR-005)
+- app checks: unique names, non-empty `command` (args are argv)
+- L6 requires `application.rehearsal.target` (non-empty)
+- the configuration file may not exceed 10 MiB (the hardening limit)
 - every restore-step reference resolves to a declared source / database /
   volume name
 - warnings (non-blocking): relative source paths (they resolve on the
-  target host, not locally); `app_checks` are recorded but not yet
-  executed; a schedule the cron engine accepts but OnCalendar cannot
-  express (`vaultline timer generate` will refuse it — `vaultline
-  schedule run` still works)
+  target host, not locally); a schedule the cron engine accepts but
+  OnCalendar cannot express (`vaultline timer generate` will refuse it —
+  `vaultline schedule run` still works)

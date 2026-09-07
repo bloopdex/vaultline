@@ -91,8 +91,14 @@ through their engine's tool (pg_restore / mysql, both fed by stdin —
 no dump path on argv), volumes are copied, health endpoints polled. The
 verification executor (`backup verify`) proves snapshots against the
 policy — L3 engine cross-check, L4 recursive content comparison against
-live files, L5 SQLite rehearsal — and records the level actually
-reached durably in the state file.
+live files, L5 SQLite rehearsal, and L6 the full recovery rehearsal
+(ADR-006): the snapshot restored into
+`<rehearsal.target>/.vaultline-rehearsal/<snapshot-id>/` with the
+procedure's path targets mirrored under the rehearsal root, then the
+app checks — and records the level actually reached durably in the
+state file (L3-L5 are recorded before the rehearsal attempt; a failing
+rehearsal never erases the level proven). Promotion decides on
+`symlink_metadata`: symlinks are recreated as links, never followed.
 
 ## The operations executors (implemented)
 

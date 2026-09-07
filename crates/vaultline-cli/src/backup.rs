@@ -533,6 +533,7 @@ mod tests {
                 schedule: None,
                 app_checks: Vec::new(),
             },
+            rehearsal: None,
             restore: vaultline_core::model::RestoreProcedure { steps: Vec::new() },
         }
     }

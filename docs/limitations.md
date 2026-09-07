@@ -3,18 +3,19 @@
 Each limitation in the four-part form: what is missing / why / what
 happens instead / what would remove it.
 
-## MySQL/MariaDB capture is implemented but not yet integration-proven
+## MySQL/MariaDB is proven by the round trip; MariaDB itself is not
 
-- **What is missing**: `mysqldump --single-transaction --routines
-  --triggers --events` capture is implemented (MYSQL_PWD environment
-  auth, argv never carries credentials) but has never run against a live
-  MySQL or MariaDB server — no integration test proves it.
-- **Why**: the verification vehicle (a MySQL testcontainer + a
-  mysqldump binary on the test host) has not been stood up; PostgreSQL
-  and SQLite were the phase's proven engines.
-- **What happens instead**: a missing/invalid connection fails with a
-  clear diagnostic; nothing pretends the mechanism is proven.
-- **What would remove it**: a MySQL/MariaDB testcontainer suite.
+- **What is missing**: the MySQL restore round trip is proven (dump →
+  mysql client into a second database → rows verified, source
+  untouched); MariaDB — the other member of the `mysql`/`mariadb` kind
+  pair — has never been run against its own server.
+- **Why**: the engines share the dump tool and the wire protocol; a
+  MariaDB testcontainer is one module swap away, and the round trip
+  already pinned one real bug (the `--databases` flag embedded CREATE
+  DATABASE/USE in dumps, overriding declared restore targets).
+- **What happens instead**: MariaDB definitions run through the same
+  mysqldump path as MySQL.
+- **What would remove it**: a MariaDB testcontainer round trip.
 
 ## Volume sidecar / pause-first semantics are declared, not captured
 
@@ -29,17 +30,19 @@ happens instead / what would remove it.
   claimed.
 - **What would remove it**: the sidecar and pause-first executors.
 
-## Docker-volume direct capture is implemented but not yet proven
+## Docker-volume direct capture is proven on Unix, not on Desktop VMs
 
-- **What is missing**: `capture = "direct"` with a docker volume name
-  resolves the mountpoint via `docker volume inspect`, but no test has
-  captured a real named Docker volume (the inspect path works; the
-  cross-platform test needs a Docker-engine-specific fixture).
-- **Why**: host-path volumes are fully proven; named-volume proof needs
-  the volume to exist on the test host's engine.
+- **What is missing**: the named docker-volume proof exists
+  (`named_docker_volume_direct_capture` — a real volume, data written
+  through a throwaway container, captured via the resolved mountpoint
+  and verified in the repository) but is Unix-gated: on Windows/macOS
+  Desktop the volume's mountpoint lives inside the Docker VM, not on
+  the host, so the test cannot run locally.
+- **Why**: the proof executes on the hosted ubuntu job (native Linux
+  Docker keeps volumes on the host).
 - **What happens instead**: resolution failures are explicit operational
   errors naming the volume.
-- **What would remove it**: a named-volume integration test.
+- **What would remove it**: nothing local — the gate is environmental.
 
 ## SFTP key_file / known_hosts are not wired
 
@@ -56,33 +59,33 @@ happens instead / what would remove it.
 - **What would remove it**: an injection-free custom-SSH mechanism or
   restic gaining first-class key-file flags.
 
-## S3/SFTP targets are declared and URL-mapped, not yet integration-tested
+## The SFTP proof is agent-gated; locally it needs the OpenSSH agent
 
-- **What is missing**: repository URL construction for s3 and sftp is
-  implemented and unit-tested; no integration test has run against a
-  real S3-compatible store or SFTP server.
-- **Why**: those tests are container-gated (MinIO, SFTP server) and the
-  container harness is being proven up.
-- **What happens instead**: local storage is the fully integration-tested
-  path; s3/sftp failures surface through restic's own error channel.
-- **What would remove it**: MinIO and SFTP testcontainers in the
-  container harness.
+- **What is missing**: the SFTP end-to-end proof exists (`atmoz/sftp`
+  sshd + key authentication through the SSH agent + the real known-hosts
+  verification path) but requires a running SSH agent — on the dev
+  machine the Windows OpenSSH agent service is disabled (error 1058),
+  so the test skips with a note.
+- **Why**: the proof executes on the hosted ubuntu job (openssh-client
+  installed); locally it runs once the agent service is enabled.
+- **What happens instead**: the suite skips with the enabling
+  instructions; S3 (MinIO) and local storage remain fully proven.
+- **What would remove it**: `Start-Service ssh-agent` on the dev
+  machine (user decision).
 
-## L6 rehearsal automation and app checks are not executed
+## Rehearsal directories of forgotten snapshots are not cleaned
 
-- **What is missing**: `verification.app_checks` is recorded but not
-  executed, and the full L6 recovery test has no scheduled rehearsal —
-  it is exercised manually through `vaultline restore --verify`, and
-  the disaster scenario is pinned by the integration suite.
-- **Why**: L6 rehearsal requires a scratch application environment
-  (hosts, DNS, external dependencies) that a backup tool cannot assume;
-  app checks are per-application semantics. Scheduling itself arrived
-  in Phase 5 (`schedule run`, systemd timers) and executes L1–L5.
-- **What happens instead**: every snapshot records the level actually
-  reached; `backup verify` and `restore --verify` raise it durably;
-  the verification schedule runs them on time.
-- **What would remove it**: a rehearsal-environment contract (Phase 6)
-  and the per-engine app-check executors.
+- **What is missing**: `backup prune` forgets engine snapshots but does
+  not remove their `<rehearsal.target>/.vaultline-rehearsal/<id>/`
+  directories — old rehearsal layouts accumulate on the rehearsal host.
+- **Why**: the per-snapshot rehearsal directory holds only vaultline's
+  own rehearsal artifacts (never user data), so cleanup is hygiene, not
+  safety; the executor already clears a directory before re-rehearsing
+  the same snapshot.
+- **What happens instead**: each snapshot's rehearsal is cleared on its
+  own next rehearsal; forgotten snapshots keep their last layout.
+- **What would remove it**: pruning the rehearsal directories of
+  forgotten snapshots in `backup prune --apply` (Phase 7 candidate).
 
 ## Cross-platform restore is not supported
 

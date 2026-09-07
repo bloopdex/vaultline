@@ -334,6 +334,7 @@ mod tests {
                 schedule: verify_schedule.map(String::from),
                 app_checks: Vec::new(),
             },
+            rehearsal: None,
             restore: RestoreProcedure { steps: Vec::new() },
         }
     }

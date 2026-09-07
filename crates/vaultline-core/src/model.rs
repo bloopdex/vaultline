@@ -33,6 +33,18 @@ pub struct Application {
     pub retention: RetentionPolicy,
     pub verification: VerificationPolicy,
     pub restore: RestoreProcedure,
+    /// Where a full recovery rehearsal executes (verification L6).
+    /// Required by validation when the verification level is L6.
+    #[serde(default)]
+    pub rehearsal: Option<RehearsalTarget>,
+}
+
+/// The scratch root for L6 rehearsals: the rehearsal restores into
+/// `<target>/.vaultline-rehearsal/<snapshot-id>/` with the procedure's
+/// path targets remapped under it — never the live paths.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RehearsalTarget {
+    pub target: String,
 }
 
 /// A named capture source. Names are unique within an application and are the
@@ -241,14 +253,28 @@ impl RetentionPolicy {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VerificationPolicy {
     pub level: VerificationLevel,
-    /// Cron expression. Recorded and validated syntactically here; execution
-    /// arrives with the scheduling phase.
+    /// Cron expression (validated here; executed by `schedule run` and
+    /// the systemd timers, ADR-005).
     #[serde(default)]
     pub schedule: Option<String>,
-    /// Named application-semantic checks (e.g. `pg-integrity`). Recorded;
-    /// execution arrives in later phases.
+    /// Executable application-semantic checks (ADR-006): shell-free argv
+    /// commands run against the rehearsal (or the restore target with
+    /// `restore --verify`). Exit 0 passes; anything else fails the
+    /// rehearsal. The environment contract: CWD is the rehearsal root and
+    /// `VAULTLINE_REHEARSAL_DIR` names it.
     #[serde(default)]
-    pub app_checks: Vec<String>,
+    pub app_checks: Vec<AppCheck>,
+}
+
+/// One executable application check (ADR-006). The command is an argv
+/// entry point — a path or a tool name — and the arguments are argv,
+/// never a shell string (the security model).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppCheck {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 /// The verification levels — the product's central distinction between
@@ -448,8 +474,13 @@ mod tests {
             verification: VerificationPolicy {
                 level: VerificationLevel::L3,
                 schedule: Some("0 3 * * 7".to_string()),
-                app_checks: vec!["pg-integrity".to_string()],
+                app_checks: vec![AppCheck {
+                    name: "pg-integrity".to_string(),
+                    command: "psql".to_string(),
+                    args: vec!["-c".to_string(), "SELECT 1".to_string()],
+                }],
             },
+            rehearsal: None,
             restore: RestoreProcedure {
                 steps: vec![
                     RestoreStep::RestoreFiles {

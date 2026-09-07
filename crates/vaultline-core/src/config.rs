@@ -51,6 +51,8 @@ pub struct WireApplication {
     pub retention: WireRetention,
     pub verification: WireVerification,
     #[serde(default)]
+    pub rehearsal: Option<WireRehearsal>,
+    #[serde(default)]
     pub restore: WireRestore,
 }
 
@@ -225,7 +227,22 @@ pub struct WireVerification {
     #[serde(default)]
     pub schedule: Option<String>,
     #[serde(default)]
-    pub app_checks: Vec<String>,
+    pub app_checks: Vec<WireAppCheck>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WireAppCheck {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WireRehearsal {
+    pub target: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -562,9 +579,43 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
             None
         }
     };
-    if !app.verification.app_checks.is_empty() {
-        warnings.push(Warning::new(
-            "application.verification.app_checks are recorded but not yet executed (app-semantic checks arrive in a later phase)",
+    // App checks (ADR-006): executable, shell-free; unique names.
+    let mut check_names = std::collections::HashSet::new();
+    for (i, check) in app.verification.app_checks.iter().enumerate() {
+        let base = format!("application.verification.app_checks[{i}]");
+        if check.name.is_empty() {
+            errors.push(ValidationError::new(
+                format!("{base}.name"),
+                "must not be empty",
+            ));
+        } else if !check_names.insert(check.name.clone()) {
+            errors.push(ValidationError::new(
+                format!("{base}.name"),
+                format!("duplicate app check name \"{}\"", check.name),
+            ));
+        }
+        if check.command.is_empty() {
+            errors.push(ValidationError::new(
+                format!("{base}.command"),
+                "must not be empty",
+            ));
+        }
+    }
+
+    // L6 requires a rehearsal root: the full recovery rehearsal needs a
+    // scratch destination the definition declares as such.
+    if level == Some(VerificationLevel::L6) && app.rehearsal.is_none() {
+        errors.push(ValidationError::new(
+            "application.rehearsal",
+            "verification level L6 requires application.rehearsal.target — the scratch root the full recovery rehearsal restores into",
+        ));
+    }
+    if let Some(rehearsal) = &app.rehearsal
+        && rehearsal.target.trim().is_empty()
+    {
+        errors.push(ValidationError::new(
+            "application.rehearsal.target",
+            "must not be empty",
         ));
     }
 
@@ -667,9 +718,32 @@ pub fn validate_application_name(name: &str) -> std::result::Result<(), Validati
     }
 }
 
+/// The configuration size limit (hardening, Phase 6): a recovery
+/// definition is a small document; 10 MiB is thousands of times larger
+/// than any real one and bounds the parser's worst case.
+pub const CONFIG_SIZE_LIMIT: u64 = 10 * 1024 * 1024;
+
 /// Load a configuration file end to end: read, parse, validate, convert.
 /// Validation failures are aggregated into one [`VaultlineError`].
 pub fn load(path: &Path) -> Result<Application> {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        VaultlineError::with_source(
+            ErrorKind::Io,
+            format!("cannot read configuration file {}", path.display()),
+            e,
+        )
+    })?;
+    if metadata.len() > CONFIG_SIZE_LIMIT {
+        return Err(VaultlineError::new(
+            ErrorKind::Config,
+            format!(
+                "configuration file {} is {} bytes — over the {} MiB limit",
+                path.display(),
+                metadata.len(),
+                CONFIG_SIZE_LIMIT / (1024 * 1024)
+            ),
+        ));
+    }
     let contents = std::fs::read_to_string(path).map_err(|e| {
         VaultlineError::with_source(
             ErrorKind::Io,
@@ -818,8 +892,23 @@ fn convert(
         verification: VerificationPolicy {
             level,
             schedule: app.verification.schedule.clone(),
-            app_checks: app.verification.app_checks.clone(),
+            app_checks: app
+                .verification
+                .app_checks
+                .iter()
+                .map(|check| crate::model::AppCheck {
+                    name: check.name.clone(),
+                    command: check.command.clone(),
+                    args: check.args.clone(),
+                })
+                .collect(),
         },
+        rehearsal: app
+            .rehearsal
+            .as_ref()
+            .map(|rehearsal| crate::model::RehearsalTarget {
+                target: rehearsal.target.clone(),
+            }),
         restore: RestoreProcedure {
             steps: app
                 .restore
@@ -903,7 +992,11 @@ keep_yearly = 1
 [application.verification]
 level = 3
 schedule = "0 3 * * 7"
-app_checks = ["pg-integrity"]
+
+[[application.verification.app_checks]]
+name = "pg-integrity"
+command = "psql"
+args = ["-c", "SELECT 1"]
 
 [[application.restore.steps]]
 restore_files = { source = "uploads", target = "/srv/thornwa/uploads" }
@@ -935,10 +1028,11 @@ wait_healthy = { url = "http://localhost:3000/health" }
             Some("30 2 * * *"),
             "the backup schedule converts"
         );
-        // Only app_checks are recorded-not-executed now — the schedule
-        // warnings retired with Phase 5 execution.
-        assert_eq!(outcome.warnings.len(), 1);
-        assert!(outcome.warnings[0].message.contains("app_checks"));
+        assert_eq!(app.verification.app_checks.len(), 1);
+        assert_eq!(app.verification.app_checks[0].name, "pg-integrity");
+        assert_eq!(app.verification.app_checks[0].command, "psql");
+        // Everything the policy declares is executable now — no warnings.
+        assert_eq!(outcome.warnings.len(), 0);
     }
 
     #[test]
@@ -1206,6 +1300,128 @@ level = 1
             "{:?}",
             outcome.errors
         );
+    }
+
+    #[test]
+    fn l6_requires_a_rehearsal_target() {
+        let mut contents = VALID.to_string();
+        contents = contents.replace("level = 3", "level = 6");
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.path == "application.rehearsal"),
+            "{:?}",
+            outcome.errors
+        );
+
+        // With a rehearsal target the L6 definition validates.
+        contents.push_str("[application.rehearsal]\ntarget = \"/srv/rehearsal\"\n");
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(outcome.is_valid(), "{:?}", outcome.errors);
+        let app = outcome.application.expect("application");
+        assert_eq!(app.rehearsal.expect("rehearsal").target, "/srv/rehearsal");
+    }
+
+    #[test]
+    fn duplicate_app_check_names_are_rejected() {
+        let mut contents = VALID.to_string();
+        contents = contents.replace(
+            "name = \"pg-integrity\"",
+            "name = \"pg-integrity\"\ncommand = \"psql\"\nargs = [\"-c\", \"SELECT 1\"]\n\n[[application.verification.app_checks]]\nname = \"pg-integrity\"",
+        );
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.message.contains("duplicate app check")),
+            "{:?}",
+            outcome.errors
+        );
+    }
+
+    #[test]
+    fn app_checks_require_name_and_command() {
+        let mut contents = VALID.to_string();
+        contents = contents.replace("command = \"psql\"", "command = \"\"");
+        let outcome = validate(parse_str(&contents).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome.errors.iter().any(|e| e.path.ends_with(".command")),
+            "{:?}",
+            outcome.errors
+        );
+    }
+
+    #[test]
+    fn oversized_configuration_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("huge.toml");
+        // 10 MiB + 1 byte of comments — over the limit.
+        let mut contents = String::with_capacity((CONFIG_SIZE_LIMIT + 1) as usize);
+        contents.push_str("# ");
+        contents.push_str(&"x".repeat(CONFIG_SIZE_LIMIT as usize));
+        std::fs::write(&path, contents).expect("write");
+        let err = load(&path).expect_err("over the limit");
+        assert!(err.to_string().contains("limit"), "{err}");
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    /// The hardening harness (Phase 6): hostile configuration input must
+    /// never panic the parser or the validator — errors are the contract,
+    /// not crashes. Deterministic mutations of the valid template
+    /// (byte flips, insertions, deletions) with a fixed seed, so a
+    /// regression reproduces exactly.
+    #[test]
+    fn mutated_configurations_never_panic() {
+        // A tiny deterministic PRNG (no dependency for the harness).
+        let mut state: u64 = 0x5eed_2026_0907;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 33) as usize
+        };
+
+        let bytes = VALID.as_bytes().to_vec();
+        for round in 0..2000 {
+            let mut mutated = bytes.clone();
+            let mutations = 1 + next() % 8;
+            for _ in 0..mutations {
+                match next() % 3 {
+                    0 if !mutated.is_empty() => {
+                        // Flip one byte.
+                        let at = next() % mutated.len();
+                        mutated[at] = mutated[at].wrapping_add(1 + (next() % 255) as u8);
+                    }
+                    1 if mutated.len() < 4096 => {
+                        // Insert a byte.
+                        let at = next() % (mutated.len() + 1);
+                        mutated.insert(at, next() as u8);
+                    }
+                    _ if mutated.len() > 1 => {
+                        // Delete a byte.
+                        let at = next() % mutated.len();
+                        mutated.remove(at);
+                    }
+                    _ => {}
+                }
+            }
+            let input = String::from_utf8_lossy(&mutated).into_owned();
+            let result = std::panic::catch_unwind(|| {
+                if let Ok(parsed) = parse_str(&input) {
+                    let _ = validate(parsed);
+                }
+            });
+            assert!(
+                result.is_ok(),
+                "mutation round {round} panicked on input: {input:?}"
+            );
+        }
     }
 
     #[test]

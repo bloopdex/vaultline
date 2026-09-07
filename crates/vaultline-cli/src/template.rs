@@ -69,13 +69,20 @@ keep_monthly = 6
 keep_yearly = 1
 
 # Verification: the level a snapshot must reach before it counts as healthy
-# (L1 command succeeded … L6 full recovery test). The schedule runs through
-# `vaultline schedule run` or the generated systemd timer; app_checks are
-# recorded for a later phase.
+# (L1 command succeeded … L6 full recovery rehearsal). The schedule runs
+# through `vaultline schedule run` or the generated systemd timer. App
+# checks are shell-free argv commands run against the rehearsal (CWD is the
+# rehearsal root, VAULTLINE_REHEARSAL_DIR names it):
+# [[application.verification.app_checks]]
+# name = "pg-integrity"
+# command = "psql"
+# args = ["-c", "SELECT 1"]
+# Level L6 requires the rehearsal root:
+# [application.rehearsal]
+# target = "/srv/rehearsal/thornwa"
 [application.verification]
 level = 3
 # schedule = "0 3 * * 7"
-# app_checks = ["pg-integrity"]
 
 # The ordered restore procedure — what a fresh host follows to reconstruct
 # this application after a disaster.

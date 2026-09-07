@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.6.0 — 2026-09-07
+
+Hardening & security — the verification ladder is complete and the
+boundaries are pinned by tests:
+
+- **The L6 recovery rehearsal executes** (ADR-006): `backup verify` at
+  policy level L6 restores the snapshot into
+  `<rehearsal.target>/.vaultline-rehearsal/<snapshot-id>/` with the
+  procedure's path targets mirrored under the rehearsal root (a scratch
+  clone of the layout — never the live paths), runs the app checks, and
+  records L6 durably. `schedule run` inherits it: a due verification at
+  L6 IS the rehearsal. L3–L5 are recorded BEFORE the rehearsal attempt —
+  a failing rehearsal does not erase the level actually proven.
+- **App checks are executable** (`name`, `command`, shell-free `args`):
+  CWD is the rehearsal root, `VAULTLINE_REHEARSAL_DIR` names it; a
+  failing check fails the rehearsal with the stderr tail as the
+  diagnosis. `restore --verify` runs them against its target. The wire
+  format changes from name strings to check tables (nothing external
+  depends on it).
+- **`application.rehearsal.target`** joins the definition and is
+  REQUIRED when the verification level is L6.
+- **The hardening layer, tested not asserted**: a 10 MiB configuration
+  size limit; a deterministic mutation harness proving the parser and
+  validator never panic on hostile input (2000 seeded rounds); the
+  malicious-archive defense — symlinks are recreated as links, never
+  followed (a host that cannot create links fails loudly), pinned by
+  unit + integration tests; the corrupt-repository fixture (a truncated
+  pack fails the inline L2 check and the snapshot records L1 — the
+  level actually reached); the redaction failure test (a failed dump
+  with an embedded password prints the password nowhere).
+- Follow-up proofs closed: the **MySQL restore round trip** (dump →
+  mysql client into a second database → rows verified, source untouched)
+  which pinned the `--databases` capture bug (the flag embedded CREATE
+  DATABASE/USE, overriding declared restore targets); the **SFTP
+  backend proof** and the **named docker-volume capture proof** written
+  (agent- and Unix-gated; they execute on the hosted ubuntu job). CI
+  installs the mysql client tools and the OpenSSH client.
+- **152 tests passing**, 0 failures, all gates green. Docs updated;
+  limitations narrowed to L6-rehearsal cleanup, app-check environment
+  extensions, cross-platform restore, and the remaining backend proofs.
+
 ## 0.5.0 — 2026-09-07
 
 Operations and scheduling — the backup runs itself, and retention

@@ -13,6 +13,7 @@ Tests are part of implementation: a feature without tests is not done.
 | engine integration | `vaultline-cli/tests/backup.rs` | the real binary + **the real restic binary**: end-to-end backup (init-if-needed, files + excludes, quiesce, git mirror, config-ref exclusion proven by repository listing), state recording, `backup list`, `--json` payload, wrong-password mapping, missing-restic diagnostics, lock refusal |
 | database integration | `vaultline-cli/tests/databases.rs` | **SQLite end-to-end without containers** (dump captured via the backup API, recorded metadata, restore-side `integrity_check` + row counts on the restored copy — the L5-lite proof); **PostgreSQL end-to-end** (testcontainers PostgreSQL + real pg_dump — on Windows through a container shim, on Unix from PATH; the dump is proven to be a valid `-Fc` archive by its PGDMP signature); **MinIO S3 end-to-end** (testcontainers MinIO + restic's s3 backend listing the bucket); volume direct capture (host path); the sidecar honesty contract |
 | restore & verification integration | `vaultline-cli/tests/restore.rs` | the sandbox-then-promote executor (files promoted, nested content, `--dry-run` writes nothing), the no-overwrite contract, **the disaster end-to-end (backup → destroy → restore → data + database intact)**, the health-endpoint poll, verification L3 (engine cross-check), L4 (recursive content comparison, tamper → failure), L5 (SQLite rehearsal, durable state record), the **PostgreSQL pg_restore round trip** (dump → restore into a second database → row count), snapshot selectors |
+| hardening integration | `vaultline-cli/tests/hardening.rs` | **the L6 rehearsal** (restores into the declared root with mirrored targets, runs the app checks — passing and failing — and records L6/L5 durably; `schedule run` at L6 rehearses), **the malicious-archive defense** (a symlink to an outside secret never leaks its content), **the corrupt-repository honesty fixture** (a truncated pack fails L2 and the next snapshot records L1), **the redaction failure test** (a failed dump with an embedded password prints the password nowhere), the **MySQL restore round trip** (dump → mysql client into a second database → rows verified, source untouched) |
 | operations integration | `vaultline-cli/tests/operations.rs` | **prune** (dry-run changes nothing and explains every decision; `--apply` forgets, prunes, records, and re-runs idempotently; `--json` carries the plan), **schedule run** (due backup + verification execute once, bookkeeping recorded, second run finds nothing due), **doctor** (healthy all-ok; a broken restic override fails the check with exit 1; structured `--json`), **status** (summary + retention projection), **timer generate** (unit content incl. the translated OnCalendar, refusal without schedules, install refusal off Linux), **validate** (invalid crons and both-restricted day fields rejected) |
 | container | `vaultline-cli/tests/containers.rs` | the harness itself: a PostgreSQL container comes up and accepts connections |
 
@@ -48,8 +49,13 @@ the test is skipped in CI by design.
 - The systemd `install` path itself runs nowhere in CI — unit-content
   generation is fully tested; the install command's systemd interaction
   is thin (write + daemon-reload + enable) and Linux-privilege-gated.
-- No fuzz targets — the configuration parser is the first fuzz candidate
-  when hardening begins.
+- The SFTP proof and the named docker-volume proof are agent- and
+  Unix-gated: they execute on the hosted ubuntu job (and locally once
+  the Windows OpenSSH agent service is enabled); the suites carry the
+  skip notes.
+- No sanitizer fuzzing (cargo-fuzz needs the nightly toolchain) — the
+  deterministic mutation harness is the stable-rust stand-in until
+  then.
 - No benchmarks — measurement starts when backup operations exist
   (SOT Section 12: baseline before target).
 

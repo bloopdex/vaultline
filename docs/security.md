@@ -68,7 +68,35 @@ threat → boundary → defense → status.
   environment contents. Config references (`.env` files) are recorded as
   pointers and are structurally excluded from the backup path list.
 - **Status**: enforced — an integration test proves the secret file's
-  content never enters the repository.
+  content never enters the repository, and a failure-path test proves a
+  failed dump with an embedded password prints the password NOWHERE
+  (argv sanitized, env never logged, engine stderr does not echo it).
+
+## Symlinks in malicious archives
+
+- **Threat**: a hostile (or compromised) snapshot whose entries are
+  symlinks pointing outside the captured tree — following them during
+  promotion would exfiltrate the link targets into the restore, or
+  recurse outside the sandbox.
+- **Boundary**: the promotion copy (`copy_tree_into`).
+- **Defense**: every entry is decided on `symlink_metadata`, never on
+  the followed type; symlinks are recreated AS symlinks pointing where
+  the archive declared — never followed, never written through. A host
+  that cannot create the link (Windows without link privileges) fails
+  loudly naming the file rather than silently following it.
+- **Status**: enforced — unit + integration tests pin that the link
+  target's content never lands in the restored tree.
+
+## Hostile configuration input
+
+- **Threat**: malformed or adversarial configuration files crashing the
+  parser or validator (panics are not diagnostics).
+- **Boundary**: `config::parse_str` / `config::validate`.
+- **Defense**: a 10 MiB file-size limit at load with a clear error, and
+  a deterministic mutation harness (seeded byte flips/insertions/
+  deletions over the valid template) asserting the parser and validator
+  never panic — errors are the contract.
+- **Status**: enforced — 2000 seeded mutation rounds in the unit suite.
 
 ## Corrupted backups
 
@@ -79,9 +107,9 @@ threat → boundary → defense → status.
   integrity checks, restore rehearsal, and the full disaster-recovery
   test — with `doctor`/`status` reporting the last-known level per
   snapshot and the verification schedule executing it.
-- **Status**: enforced — L1–L5 execute on demand and on schedule, the
-  reached level is recorded durably, and the disaster scenario is
-  pinned by tests.
+- **Status**: enforced — L1–L6 execute on demand and on schedule (L6
+  is the full recovery rehearsal, ADR-006), the reached level is
+  recorded durably, and the disaster scenario is pinned by tests.
 
 ## Destructive actions (prune)
 

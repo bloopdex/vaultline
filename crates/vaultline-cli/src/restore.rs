@@ -181,7 +181,51 @@ pub fn copy_tree_into(src: &Path, dst: &Path) -> Result<u64> {
         })?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        if from.is_dir() {
+
+        // The malicious-archive defense: decide on the link metadata, NOT
+        // the followed type. `is_dir`/`fs::copy` follow symlinks — a link
+        // to a directory would recurse outside the snapshot tree, a link
+        // to a file would copy the target's bytes. Symlinks are restored
+        // AS symlinks (recreated pointing where the archive declared),
+        // never followed and never written through.
+        let metadata = std::fs::symlink_metadata(&from).map_err(|e| {
+            VaultlineError::with_source(ErrorKind::Io, format!("cannot stat {}", from.display()), e)
+        })?;
+        if metadata.file_type().is_symlink() {
+            if to.exists() {
+                return Err(VaultlineError::new(
+                    ErrorKind::Operational,
+                    format!(
+                        "refusing to overwrite existing file {} during promotion (remove it or choose another target)",
+                        to.display()
+                    ),
+                ));
+            }
+            let link_target = std::fs::read_link(&from).map_err(|e| {
+                VaultlineError::with_source(
+                    ErrorKind::Io,
+                    format!("cannot read the symlink {}", from.display()),
+                    e,
+                )
+            })?;
+            create_symlink(&link_target, &to, metadata.file_type().is_dir())
+                .map_err(|e| {
+                    VaultlineError::with_source(
+                        ErrorKind::Operational,
+                        format!(
+                            "cannot recreate the symlink {} ({} → {}): the archive declares a link this host refuses to create",
+                            to.display(),
+                            from.display(),
+                            link_target.display()
+                        ),
+                        e,
+                    )
+                })?;
+            copied += 1;
+            continue;
+        }
+
+        if metadata.is_dir() {
             copied += copy_tree_into(&from, &to)?;
         } else {
             if to.exists() {
@@ -204,6 +248,25 @@ pub fn copy_tree_into(src: &Path, dst: &Path) -> Result<u64> {
         }
     }
     Ok(copied)
+}
+
+/// Create a symlink the way the platform demands (Windows distinguishes
+/// file and directory links and may refuse both without privileges —
+/// the refusal is the point: a host that cannot honor links fails
+/// loudly, never silently follows them).
+fn create_symlink(target: &Path, link: &Path, is_dir: bool) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        if is_dir {
+            std::os::windows::fs::symlink_dir(target, link)
+        } else {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+    }
 }
 
 /// A minimal HTTP health probe (std only — no client dependency for one
@@ -449,44 +512,8 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
         );
     }
 
-    let mut restored_files = 0u64;
-    let mut restored_databases: Vec<String> = Vec::new();
-    let mut restored_volumes = 0u64;
-
-    for step in &app.restore.steps {
-        match step {
-            RestoreStep::RestoreFiles { source, target } => {
-                let source_paths = file_source_paths(&app, source)?;
-                let mut count = 0u64;
-                for path in source_paths {
-                    let in_snapshot = restored_root.join(trim_root(&snapshot_path_of(&path)));
-                    count += copy_tree_into(&in_snapshot, Path::new(target))?;
-                }
-                info!(source, target, files = count, "restored files");
-                restored_files += count;
-            }
-            RestoreStep::RestoreDatabase {
-                database,
-                target_database,
-            } => {
-                restore_database(&app, database, target_database.as_deref(), &restored_root)?;
-                restored_databases.push(database.clone());
-            }
-            RestoreStep::RestoreVolume { volume } => {
-                let volume_path = crate::backup::resolve_volume_path(volume)?;
-                let in_snapshot = restored_root.join(trim_root(&snapshot_path_of(
-                    &volume_path.display().to_string(),
-                )));
-                let count = copy_tree_into(&in_snapshot, &volume_path)?;
-                info!(volume, files = count, "restored volume");
-                restored_volumes += count;
-            }
-            RestoreStep::WaitHealthy { url } => {
-                wait_healthy(url, Duration::from_secs(30))?;
-                info!(url, "health endpoint reported healthy");
-            }
-        }
-    }
+    let (restored_files, restored_databases, restored_volumes) =
+        execute_steps(&app, &restored_root, None)?;
 
     let duration_ms = started.elapsed().as_millis() as u64;
     metrics::emit_u64("restore_duration_ms", duration_ms);
@@ -505,6 +532,17 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
         match run_restore_checks(&app, &snapshot.id, &restored_databases) {
             Ok(notes) => {
                 summary.push_str(&format!("\nverification: {}", notes.join("; ")));
+            }
+            Err(e) => {
+                metrics::emit_u64("restore_rehearsal_failures", 1);
+                return Err(e);
+            }
+        }
+        // The app checks run against the restore target (ADR-006: CWD is
+        // the target, VAULTLINE_REHEARSAL_DIR names it).
+        match run_app_checks(&app, &args.target) {
+            Ok(notes) => {
+                summary.push_str(&format!("\napp checks: {}", notes.join("; ")));
             }
             Err(e) => {
                 metrics::emit_u64("restore_rehearsal_failures", 1);
@@ -530,6 +568,220 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
         println!("{summary}");
     }
     Ok(())
+}
+
+/// Execute the definition's ordered restore procedure against a restored
+/// snapshot tree. With `rehearsal_root: None` the procedure promotes into
+/// its declared destinations (the live restore); with `Some(root)` the
+/// path targets are mirrored under the root — a scratch clone of the
+/// application layout for the L6 rehearsal, never the live paths.
+/// Wait-health steps run as declared in both modes (the rehearsal's
+/// endpoint is the operator's rehearsal environment).
+fn execute_steps(
+    app: &Application,
+    restored_root: &Path,
+    rehearsal_root: Option<&Path>,
+) -> Result<(u64, Vec<String>, u64)> {
+    let remap_path = |target: &str| -> String {
+        match rehearsal_root {
+            None => target.to_string(),
+            Some(root) => {
+                // Mirror the absolute target under the root: strip the
+                // leading slashes AND a Windows drive prefix, so the join
+                // stays relative and the root is always the prefix.
+                let mut trimmed = target.trim_start_matches(['/', '\\']);
+                if trimmed.len() >= 2
+                    && trimmed.as_bytes()[0].is_ascii_alphabetic()
+                    && trimmed.as_bytes()[1] == b':'
+                {
+                    trimmed = trimmed[2..].trim_start_matches(['/', '\\']);
+                }
+                if trimmed.is_empty() {
+                    root.display().to_string()
+                } else {
+                    root.join(trimmed).display().to_string()
+                }
+            }
+        }
+    };
+
+    let mut restored_files = 0u64;
+    let mut restored_databases: Vec<String> = Vec::new();
+    let mut restored_volumes = 0u64;
+
+    for step in &app.restore.steps {
+        match step {
+            RestoreStep::RestoreFiles { source, target } => {
+                let source_paths = file_source_paths(app, source)?;
+                let target = remap_path(target);
+                let mut count = 0u64;
+                for path in source_paths {
+                    let in_snapshot = restored_root.join(trim_root(&snapshot_path_of(&path)));
+                    count += copy_tree_into(&in_snapshot, Path::new(&target))?;
+                }
+                info!(source, target, files = count, "restored files");
+                restored_files += count;
+            }
+            RestoreStep::RestoreDatabase {
+                database,
+                target_database,
+            } => {
+                // Only a SQLite target is a path (server targets are
+                // database names) — remap the path kind under the root.
+                let db = app
+                    .databases
+                    .iter()
+                    .find(|d| d.name == *database)
+                    .ok_or_else(|| {
+                        VaultlineError::new(
+                            ErrorKind::Operational,
+                            format!("no database named \"{database}\" in the definition"),
+                        )
+                    })?;
+                let target = match (db.kind, target_database.as_deref()) {
+                    (DatabaseType::Sqlite, Some(path)) => Some(remap_path(path)),
+                    (_, other) => other.map(String::from),
+                };
+                restore_database(app, database, target.as_deref(), restored_root)?;
+                restored_databases.push(database.clone());
+            }
+            RestoreStep::RestoreVolume { volume } => {
+                let volume_path = crate::backup::resolve_volume_path(volume)?;
+                let target = remap_path(&volume_path.display().to_string());
+                let in_snapshot = restored_root.join(trim_root(&snapshot_path_of(
+                    &volume_path.display().to_string(),
+                )));
+                let count = copy_tree_into(&in_snapshot, Path::new(&target))?;
+                info!(volume, files = count, "restored volume");
+                restored_volumes += count;
+            }
+            RestoreStep::WaitHealthy { url } => {
+                wait_healthy(url, Duration::from_secs(30))?;
+                info!(url, "health endpoint reported healthy");
+            }
+        }
+    }
+    Ok((restored_files, restored_databases, restored_volumes))
+}
+
+/// Run the definition's app checks against a rehearsed (or restored)
+/// tree (ADR-006): CWD is the root, `VAULTLINE_REHEARSAL_DIR` names it.
+/// A check that cannot start or exits non-zero fails the rehearsal — the
+/// stderr tail is the diagnosis.
+fn run_app_checks(app: &Application, root: &Path) -> Result<Vec<String>> {
+    let mut notes = Vec::new();
+    for check in &app.verification.app_checks {
+        let output = Command::new(&check.command)
+            .args(&check.args)
+            .current_dir(root)
+            .env("VAULTLINE_REHEARSAL_DIR", root)
+            .output()
+            .map_err(|e| {
+                VaultlineError::with_source(
+                    ErrorKind::Operational,
+                    format!(
+                        "cannot start app check \"{}\" ({}): {}",
+                        check.name, check.command, e
+                    ),
+                    e,
+                )
+            })?;
+        if output.status.success() {
+            notes.push(format!("app check \"{}\" passed", check.name));
+        } else {
+            return Err(VaultlineError::new(
+                ErrorKind::Operational,
+                format!(
+                    "app check \"{}\" FAILED: {}",
+                    check.name,
+                    String::from_utf8_lossy(&output.stderr)
+                        .lines()
+                        .rev()
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                ),
+            ));
+        }
+    }
+    Ok(notes)
+}
+
+/// The L6 executor: a full recovery rehearsal into the declared scratch
+/// root — `<target>/.vaultline-rehearsal/<snapshot-id>/` with the
+/// procedure's path targets mirrored under the root — then the app
+/// checks. The per-snapshot directory is cleared first: it holds only
+/// this snapshot's previous rehearsal, never user data.
+fn run_rehearsal(
+    app: &Application,
+    snapshot: &BackupSnapshot,
+    restic: &Restic,
+    repo: &str,
+    password: &str,
+    extra_envs: &[(String, String)],
+) -> Result<Vec<String>> {
+    let root = app.rehearsal.as_ref().ok_or_else(|| {
+        VaultlineError::new(
+            ErrorKind::Internal,
+            "L6 rehearsal without application.rehearsal — validation should have refused this",
+        )
+    })?;
+    let root_path = Path::new(&root.target);
+    let run_dir = root_path.join(".vaultline-rehearsal").join(&snapshot.id);
+    if run_dir.exists() {
+        info!(
+            dir = %run_dir.display(),
+            "clearing this snapshot's previous rehearsal"
+        );
+        std::fs::remove_dir_all(&run_dir).map_err(|e| {
+            VaultlineError::with_source(
+                ErrorKind::Io,
+                format!(
+                    "cannot clear the previous rehearsal directory {}",
+                    run_dir.display()
+                ),
+                e,
+            )
+        })?;
+    }
+    std::fs::create_dir_all(&run_dir).map_err(|e| {
+        VaultlineError::with_source(
+            ErrorKind::Io,
+            format!(
+                "cannot create the rehearsal directory {}",
+                run_dir.display()
+            ),
+            e,
+        )
+    })?;
+    let data_temp = TempDir::new_in(&run_dir).map_err(|e| {
+        VaultlineError::with_source(
+            ErrorKind::Io,
+            "cannot create the rehearsal staging directory",
+            e,
+        )
+    })?;
+    let restored_root = data_temp.path().to_path_buf();
+
+    restic_restore(
+        restic,
+        &snapshot.engine_snapshot.snapshot_id,
+        repo,
+        password,
+        extra_envs,
+        &restored_root,
+    )?;
+    let (files, databases, volumes) = execute_steps(app, &restored_root, Some(root_path))?;
+
+    let mut notes = vec![format!(
+        "L6: rehearsed {} file(s), {} database(s), {} volume(s) under {}",
+        files,
+        databases.len(),
+        volumes,
+        root.target
+    )];
+    notes.extend(run_app_checks(app, root_path)?);
+    Ok(notes)
 }
 
 /// The engine restore: full snapshot into an empty target directory.
@@ -1071,16 +1323,24 @@ pub fn run_verify(args: BackupVerifyArgs) -> Result<()> {
         reached = vaultline_core::model::VerificationLevel::L5;
     }
 
-    // The durability of verification: update the state record.
-    let recorded = state
-        .applications
-        .get_mut(&app.name)
-        .and_then(|s| s.snapshots.iter_mut().find(|s| s.id == snapshot.id))
-        .expect("the snapshot exists (selected from the same state)");
-    if reached > recorded.integrity.highest_verified_level {
-        recorded.integrity.highest_verified_level = reached;
-        recorded.integrity.verified_at = Some(chrono::Utc::now());
-        state.save(&state_path)?;
+    // The durability of verification: record the level reached so far
+    // BEFORE attempting L6 — a rehearsal failure must not erase the L5
+    // that was actually proven.
+    record_reached(&mut state, &state_path, &app.name, &snapshot.id, reached);
+
+    // L6: the full recovery rehearsal (ADR-006) — the policy's top level,
+    // executed against the declared rehearsal root with the app checks.
+    if level >= vaultline_core::model::VerificationLevel::L6 {
+        checks.extend(run_rehearsal(
+            &app,
+            &snapshot,
+            &restic,
+            &repo,
+            &password,
+            &extra_envs,
+        )?);
+        reached = vaultline_core::model::VerificationLevel::L6;
+        record_reached(&mut state, &state_path, &app.name, &snapshot.id, reached);
     }
 
     metrics::emit_u64("verification_level_reached", reached.to_number() as u64);
@@ -1107,6 +1367,28 @@ pub fn run_verify(args: BackupVerifyArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Raise a snapshot's recorded verification level (durably, only upward).
+fn record_reached(
+    state: &mut State,
+    state_path: &Path,
+    app_name: &str,
+    snapshot_id: &str,
+    reached: vaultline_core::model::VerificationLevel,
+) {
+    if let Some(recorded) = state
+        .applications
+        .get_mut(app_name)
+        .and_then(|s| s.snapshots.iter_mut().find(|s| s.id == snapshot_id))
+        && reached > recorded.integrity.highest_verified_level
+    {
+        recorded.integrity.highest_verified_level = reached;
+        recorded.integrity.verified_at = Some(chrono::Utc::now());
+        if let Err(e) = state.save(state_path) {
+            warn!(error = %e, "cannot persist the verification record — the level reached this run is not recorded");
+        }
+    }
 }
 
 pub fn run_inspect(args: BackupInspectArgs) -> Result<()> {
@@ -1198,6 +1480,64 @@ mod tests {
         {
             assert_eq!(snapshot_path_of("/srv/app/data"), "/srv/app/data");
         }
+    }
+
+    #[test]
+    fn copy_tree_into_never_follows_symlinks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).expect("src dir");
+        std::fs::write(src.join("real.txt"), "real content").expect("real file");
+
+        // The secret lives OUTSIDE the tree; the link points at it.
+        let secret = dir.path().join("secret.txt");
+        std::fs::write(&secret, "TOP-SECRET").expect("secret");
+        let link = src.join("leak");
+        #[cfg(unix)]
+        let created = std::os::unix::fs::symlink(&secret, &link);
+        #[cfg(windows)]
+        let created = std::os::windows::fs::symlink_file(&secret, &link);
+        if created.is_err() {
+            eprintln!("skipping: this host cannot create symlinks");
+            return;
+        }
+
+        let dst = dir.path().join("dst");
+        copy_tree_into(&src, &dst).expect("copy");
+
+        // The destination contains the real file and a LINK — never the
+        // secret's bytes.
+        fn contains(dir: &Path, needle: &str) -> bool {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return false;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_symlink() {
+                    continue;
+                }
+                if path.is_dir() {
+                    if contains(&path, needle) {
+                        return true;
+                    }
+                } else if std::fs::read_to_string(&path)
+                    .map(|c| c.contains(needle))
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        assert!(!contains(&dst, "TOP-SECRET"), "the secret leaked");
+        let dst_link = dst.join("leak");
+        assert!(
+            std::fs::symlink_metadata(&dst_link)
+                .expect("link metadata")
+                .file_type()
+                .is_symlink(),
+            "the link must be recreated as a link"
+        );
     }
 
     #[test]

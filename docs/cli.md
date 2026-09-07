@@ -115,8 +115,17 @@ list` shows it):
 - **L5** — SQLite databases are restored to scratch and pass
   `integrity_check`; server engines get an honest note (their rehearsal
   is `vaultline restore --verify` against a scratch instance).
+- **L6** — the full recovery rehearsal (ADR-006): the snapshot is
+  restored into `<rehearsal.target>/.vaultline-rehearsal/<snapshot-id>/`
+  with the procedure's path targets mirrored under the rehearsal root
+  (never the live paths), then the app checks run (CWD is the rehearsal
+  root, `VAULTLINE_REHEARSAL_DIR` names it). L3–L5 are recorded before
+  the rehearsal attempt — a failing rehearsal does not erase the level
+  actually proven.
 
-`<snapshot>` is the full id, a unique prefix, or `latest`.
+`<snapshot>` is the full id, a unique prefix, or `latest`. The
+definition must declare `application.rehearsal.target` when the policy
+level is L6.
 
 ### `vaultline backup inspect`
 
@@ -148,7 +157,25 @@ Executes the definition's ordered restore procedure for the snapshot:
 
 The default target is `./vaultline-restore` — never the live paths
 unless the procedure declares them. `--dry-run` prints the plan and
-writes nothing.
+writes nothing. `--verify` also runs the definition's app checks
+against the target (same environment contract as L6).
+
+### App checks (ADR-006)
+
+Declared per definition:
+
+```toml
+[[application.verification.app_checks]]
+name = "pg-integrity"
+command = "psql"
+args = ["-c", "SELECT 1"]
+```
+
+Shell-free argv: `command` is a path or tool name, `args` are argv —
+never a shell string. The environment contract: CWD is the rehearsal
+root (L6) or the restore target (`restore --verify`), and
+`VAULTLINE_REHEARSAL_DIR` names it. Exit 0 passes; anything else fails
+the verification with the stderr tail as the diagnosis.
 
 ### `vaultline backup prune`
 
