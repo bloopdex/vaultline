@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
-use tracing::warn;
+use tracing::{info, warn};
 
 use vaultline_core::config;
 use vaultline_core::error::{ErrorKind, Result, VaultlineError};
@@ -39,7 +39,7 @@ pub struct BackupPruneArgs {
 pub fn run_prune(args: BackupPruneArgs) -> Result<()> {
     let app = config::load(&args.config)?;
     let state_dir = state_dir()?;
-    let _lock = StateLock::acquire(&state_dir)?;
+    let _lock = StateLock::acquire_with(&state_dir, &crate::backup::process_is_alive)?;
     let state_path = state_dir.join("state.json");
     let state = State::load(&state_path)?;
     let snapshots = state
@@ -153,6 +153,31 @@ pub fn run_prune(args: BackupPruneArgs) -> Result<()> {
         restic.prune(&repo, &password, &extra_envs)?;
     }
 
+    // Hygiene (ADR-007, the Phase 7 candidate): a forgotten snapshot's
+    // rehearsal directory holds only vaultline's own rehearsal artifacts
+    // for that snapshot — remove it with its snapshot.
+    let mut rehearsals_removed = 0usize;
+    if let Some(rehearsal) = &app.rehearsal {
+        for snapshot_id in &forgotten {
+            let dir = std::path::Path::new(&rehearsal.target)
+                .join(".vaultline-rehearsal")
+                .join(snapshot_id);
+            if dir.exists() {
+                match crate::restore::remove_tree_robust(&dir) {
+                    Ok(()) => {
+                        info!(dir = %dir.display(), "removed the forgotten snapshot's rehearsal directory");
+                        rehearsals_removed += 1;
+                    }
+                    Err(e) => warn!(
+                        dir = %dir.display(),
+                        error = %e,
+                        "cannot remove the forgotten snapshot's rehearsal directory; leaving it"
+                    ),
+                }
+            }
+        }
+    }
+
     // Record the outcome: snapshots stay immutable; the operations record
     // notes what was forgotten and when.
     let now = Utc::now();
@@ -167,9 +192,10 @@ pub fn run_prune(args: BackupPruneArgs) -> Result<()> {
     state.save(&state_path)?;
 
     println!(
-        "prune applied: {} snapshot(s) forgotten, {} kept; repository space reclaimed",
+        "prune applied: {} snapshot(s) forgotten, {} kept; {} rehearsal director(y/ies) removed; repository space reclaimed",
         engine_ids.len(),
-        kept_count
+        kept_count,
+        rehearsals_removed
     );
     Ok(())
 }

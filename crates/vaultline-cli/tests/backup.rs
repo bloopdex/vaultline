@@ -261,7 +261,29 @@ fn concurrent_backup_is_refused_by_the_lock() {
     let fixture = Fixture::new();
     let state_dir = fixture._dir.path().join("state");
     std::fs::create_dir_all(&state_dir).expect("state dir");
-    std::fs::write(state_dir.join("lock"), "pid 99999").expect("lock");
+    // A LIVE holder: the strict contract refuses only while the recorded
+    // pid is actually alive (a dead holder's stale lock is reclaimed —
+    // ADR-007, tested in tests/operations.rs).
+    let mut holder = if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > nul"])
+            .spawn()
+            .expect("holder")
+    } else {
+        Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .expect("holder")
+    };
+    std::fs::write(
+        state_dir.join("lock"),
+        format!(
+            "pid {}
+",
+            holder.id()
+        ),
+    )
+    .expect("lock");
 
     cmd.args(["backup", "run", "--config"])
         .arg(&fixture.config)
@@ -270,6 +292,9 @@ fn concurrent_backup_is_refused_by_the_lock() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("another vaultline process"));
+
+    let _ = holder.kill();
+    let _ = holder.wait();
 }
 
 /// A git mirror source is cloned and enters the backup.

@@ -25,4 +25,4 @@ vaultline-core = { path = "../vaultline-core" }
 assert_cmd = "2"
 predicates = "3"
 testcontainers = { version = "0.27", features = ["blocking"] }
-testcontainers-modules = { version = "0.15", features = ["postgres", "mysql"] }
+testcontainers-modules = { version = "0.15", features = ["postgres", "mysql", "mariadb"] }

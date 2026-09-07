@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.7.0 — 2026-09-07
+
+Reliability & performance — three recorded gaps closed, one pair
+proven, one debt paid:
+
+- **Stale-lock recovery** (ADR-007): the lock file carries the holder's
+  pid; on contention a liveness probe decides — a dead holder (a
+  crashed run) is reclaimed with a warning and retried once, an alive
+  holder is refused as before, an unparsable lock is never reclaimed.
+  The probe is CLI-side (`kill -0` / `tasklist`), fail-safe on
+  "unknown" (counts as alive), and the core lock stays process-I/O-free.
+- **The vanished-source defense**: restic SKIPS missing paths silently
+  ("does not exist, skipping" — verified empirically), which would
+  record a silently-incomplete snapshot. Every declared capture path is
+  existence-checked before the engine runs; a vanished source aborts
+  the backup naming the path.
+- **Rehearsal isolation**: the remap root is the per-snapshot rehearsal
+  directory (staging AND promoted layout), so rehearsals of different
+  snapshots never collide and re-rehearsing clears only its own
+  directory; the app checks run with that directory as CWD.
+- **Prune removes the forgotten snapshots' rehearsal directories** —
+  robustly on Windows: restic-restored directories carry mode-derived
+  restrictive ACLs (recorded: not even the read-only attribute can be
+  changed on them without an `icacls /reset` by the owner — the same
+  root cause as its restore-timestamp quirk), so the removal resets
+  ACLs, clears attributes, and retries briefly.
+- **A partial restore explains itself**: promotion stopped part-way
+  tells the operator what remains and how to retry.
+- **The MariaDB restore round trip is proven** (dump → client into a
+  second database → rows verified, source untouched) — the
+  mysql/mariadb kind pair is closed; the mariadb:11.3 image's tool
+  rename (`mysqldump` absent; `mariadb-dump`/`mariadb`) is recorded.
+- **The benchmark baseline** (SOT Section 12): config load+validate,
+  retention plan over 1000 snapshots, cron next-occurrence, and the
+  state round trip measured as medians, committed to
+  docs/benchmarks/baseline.json, and regression-checked by
+  scripts/bench-check.py (3x threshold).
+- **159 tests passing**, 0 failures, all gates green incl. the bench
+  check.
+
 ## 0.6.0 — 2026-09-07
 
 Hardening & security — the verification ladder is complete and the

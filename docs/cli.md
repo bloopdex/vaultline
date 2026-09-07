@@ -88,7 +88,9 @@ never claims coverage it does not have.
 
 The state directory is `VAULTLINE_STATE_DIR`, else the platform data
 directory (`~/.local/state/vaultline` on Linux). A lockfile refuses
-concurrent runs (see `vaultline backup list`'s state below).
+concurrent runs — with stale-lock recovery: a lock whose recorded
+holder pid is DEAD (a crashed run) is reclaimed with a warning, while
+a live holder is refused as before (ADR-007).
 
 ### `vaultline backup list`
 
@@ -191,10 +193,12 @@ rule"). **Dry-run by default** — without `--apply` nothing changes.
 
 `--apply` cross-checks the engine first (only ids the engine still
 holds are forgotten — never blind), runs `restic forget` for them and
-then `restic prune` (the engine's own defaults govern repack), and
-records the outcome in the state file. Re-running after an applied
-prune forgets nothing more (idempotent). Snapshot records are never
-rewritten — pruning appends to the operations record.
+then `restic prune` (the engine's own defaults govern repack), removes
+the forgotten snapshots' rehearsal directories (when a rehearsal
+target is declared), and records the outcome in the state file.
+Re-running after an applied prune forgets nothing more (idempotent).
+Snapshot records are never rewritten — pruning appends to the
+operations record.
 
 ### `vaultline schedule run`
 

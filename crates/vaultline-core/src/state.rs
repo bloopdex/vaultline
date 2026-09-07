@@ -167,10 +167,20 @@ pub struct StateLock {
 }
 
 impl StateLock {
-    /// Acquire the lock. Fails (operational) when another vaultline process
-    /// holds it — a stale lock (crashed process) is removed manually: the
-    /// error message says which file and why.
+    /// Acquire the lock with the strict contract: a held lock is an
+    /// explicit error, never reclaimed (a stale lock is removed manually
+    /// — the error message says which file and why).
     pub fn acquire(state_dir: &Path) -> Result<Self> {
+        Self::acquire_with(state_dir, &|_| true)
+    }
+
+    /// Acquire the lock with stale-lock recovery (ADR-007): on
+    /// contention, the lock's recorded holder pid is tested with
+    /// `is_alive`. A DEAD holder (a crashed run) is reclaimed with a
+    /// warning; an ALIVE holder errors as before. An unreadable or
+    /// unparsable lock file is never reclaimed — without evidence of the
+    /// holder's death, the strict contract stands.
+    pub fn acquire_with(state_dir: &Path, is_alive: &dyn Fn(u32) -> bool) -> Result<Self> {
         std::fs::create_dir_all(state_dir).map_err(|e| {
             VaultlineError::with_source(
                 ErrorKind::Io,
@@ -179,23 +189,43 @@ impl StateLock {
             )
         })?;
         let path = state_dir.join("lock");
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut file) => {
-                use std::io::Write;
-                let _ = writeln!(file, "pid {}", std::process::id());
-                Ok(Self { path })
+        match Self::try_create(&path) {
+            Ok(lock) => Ok(lock),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let holder_pid = read_lock_pid(&path);
+                match holder_pid {
+                    Some(pid) if !is_alive(pid) => {
+                        // Evidence of death: reclaim and retry once.
+                        tracing::warn!(
+                            pid,
+                            lock = %path.display(),
+                            "reclaiming the stale lock of a dead process"
+                        );
+                        if let Err(remove_err) = std::fs::remove_file(&path) {
+                            return Err(VaultlineError::with_source(
+                                ErrorKind::Io,
+                                format!(
+                                    "the lock {} is stale (holder pid {pid} is dead) but cannot be removed",
+                                    path.display()
+                                ),
+                                remove_err,
+                            ));
+                        }
+                        match Self::try_create(&path) {
+                            Ok(lock) => Ok(lock),
+                            Err(again) if again.kind() == std::io::ErrorKind::AlreadyExists => {
+                                Err(held_error(&path))
+                            }
+                            Err(again) => Err(VaultlineError::with_source(
+                                ErrorKind::Io,
+                                format!("cannot create lock file {}", path.display()),
+                                again,
+                            )),
+                        }
+                    }
+                    _ => Err(held_error(&path)),
+                }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(VaultlineError::new(
-                ErrorKind::Operational,
-                format!(
-                    "another vaultline process is running (lock held: {}); if no process is running, remove the stale lock file",
-                    path.display()
-                ),
-            )),
             Err(e) => Err(VaultlineError::with_source(
                 ErrorKind::Io,
                 format!("cannot create lock file {}", path.display()),
@@ -203,6 +233,41 @@ impl StateLock {
             )),
         }
     }
+
+    fn try_create(path: &Path) -> std::io::Result<Self> {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                let _ = writeln!(file, "pid {}", std::process::id());
+                Ok(Self {
+                    path: path.to_path_buf(),
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+fn held_error(path: &Path) -> VaultlineError {
+    VaultlineError::new(
+        ErrorKind::Operational,
+        format!(
+            "another vaultline process is running (lock held: {}); if no process is running, remove the stale lock file",
+            path.display()
+        ),
+    )
+}
+
+/// The holder pid recorded in the lock file ("pid <n>"), or None when the
+/// file is unreadable or malformed.
+fn read_lock_pid(path: &Path) -> Option<u32> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let pid = contents.lines().next()?.strip_prefix("pid ")?;
+    pid.trim().parse().ok()
 }
 
 impl Drop for StateLock {
@@ -324,5 +389,51 @@ mod tests {
         assert!(err.to_string().contains("lock"));
         assert!(err.to_string().contains("stale"));
         drop(lock);
+    }
+
+    fn write_lock_with_pid(dir: &Path, pid: u32) {
+        std::fs::create_dir_all(dir).expect("state dir");
+        std::fs::write(dir.join("lock"), format!("pid {pid}\n")).expect("lock file");
+    }
+
+    #[test]
+    fn dead_holder_is_reclaimed_by_evidence() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_lock_with_pid(dir.path(), 999_999_999);
+        // The checker reports the holder dead: the lock is reclaimed and
+        // the acquisition succeeds.
+        let lock = StateLock::acquire_with(dir.path(), &|_| false).expect("reclaimed");
+        assert!(dir.path().join("lock").exists(), "reacquired");
+        drop(lock);
+    }
+
+    #[test]
+    fn alive_holder_is_never_reclaimed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_lock_with_pid(dir.path(), 42);
+        let err = StateLock::acquire_with(dir.path(), &|_| true).expect_err("alive");
+        assert!(
+            err.to_string().contains("another vaultline process"),
+            "{err}"
+        );
+        assert!(
+            dir.path().join("lock").exists(),
+            "the held lock must survive"
+        );
+    }
+
+    #[test]
+    fn unparsable_lock_is_never_reclaimed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path()).expect("state dir");
+        std::fs::write(dir.path().join("lock"), "garbage").expect("lock file");
+        // Even with the checker saying dead, an unreadable pid is no
+        // evidence — the strict contract stands.
+        let err = StateLock::acquire_with(dir.path(), &|_| false).expect_err("unparsable");
+        assert!(
+            err.to_string().contains("another vaultline process"),
+            "{err}"
+        );
+        assert!(dir.path().join("lock").exists());
     }
 }

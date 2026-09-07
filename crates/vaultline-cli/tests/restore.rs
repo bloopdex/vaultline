@@ -221,7 +221,10 @@ fn restore_refuses_to_overwrite_existing_files() {
         .env("VAULTLINE_STATE_DIR", fixture.state_dir())
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("refusing to overwrite"));
+        .stderr(predicate::str::contains("refusing to overwrite"))
+        // The partial-restore guidance (ADR-007): the operator is told the
+        // promotion stopped part-way and how to retry.
+        .stderr(predicate::str::contains("stopped part-way"));
 
     assert_eq!(
         std::fs::read_to_string(fixture.restore_target.join("uploads/hello.txt")).expect("file"),
@@ -702,6 +705,158 @@ restore_database = {{ database = "main", target_database = "test2" }}
 
     let source_still = exec(&[
         "mysql",
+        "-uroot",
+        "-N",
+        "test",
+        "-e",
+        "SELECT COUNT(*) FROM t;",
+    ]);
+    let out = String::from_utf8_lossy(&source_still.stdout);
+    assert!(source_still.status.success(), "{out}");
+    assert!(out.trim() == "3", "source rows untouched: {out}");
+}
+
+/// MariaDB round trip (container-gated): the same capture/restore path as
+/// MySQL against the mariadb engine — closing the mysql/mariadb kind
+/// pair (the Phase 7 candidate).
+#[test]
+fn mariadb_restore_round_trip() {
+    if restic_bin().is_none() || docker_available().is_none() {
+        eprintln!("skipping: restic or Docker not available (container-gated)");
+        return;
+    }
+    use testcontainers::runners::SyncRunner as _;
+
+    let fixture = Fixture::new();
+    let base = format!(
+        r#"
+[application]
+name = "thornwa"
+[[application.sources.files]]
+name = "uploads"
+paths = ["{uploads}"]
+[application.storage]
+kind = "local"
+path = "{repo_parent}"
+password_env = "VAULTLINE_TEST_PASSWORD"
+[application.retention]
+keep_last = 14
+[application.verification]
+level = 2
+[[application.restore.steps]]
+restore_files = {{ source = "uploads", target = "{restore_target}/uploads" }}
+[[application.restore.steps]]
+restore_database = {{ database = "main", target_database = "test2" }}
+"#,
+        uploads = toml_path(&fixture.uploads),
+        repo_parent = toml_path(fixture.repo.parent().expect("repo parent")),
+        restore_target = toml_path(&fixture.restore_target),
+    );
+
+    let mariadb = testcontainers_modules::mariadb::Mariadb::default();
+    let node = mariadb.start().expect("start mariadb");
+    let port = node.get_host_port_ipv4(3306).expect("mapped port");
+
+    let exec = |args: &[&str]| -> std::process::Output {
+        Command::new("docker")
+            .arg("exec")
+            .arg(node.id())
+            .args(args)
+            .output()
+            .expect("docker exec runs")
+    };
+
+    // The module's root has no password and a default database `test`.
+    // The mariadb image ships the `mariadb` client (and `mysql` as its
+    // alias); both accept the same flags.
+    let seed = exec(&[
+        "mariadb",
+        "-uroot",
+        "test",
+        "-e",
+        "CREATE TABLE t(x INT); INSERT INTO t VALUES (1),(2),(3);",
+    ]);
+    assert!(
+        seed.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+
+    let create_db = exec(&["mariadb", "-uroot", "-e", "CREATE DATABASE test2;"]);
+    assert!(
+        create_db.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&create_db.stderr)
+    );
+
+    let db_url = if cfg!(windows) {
+        format!("mysql://root@host.docker.internal:{port}/test")
+    } else {
+        format!("mysql://root@localhost:{port}/test")
+    };
+    let contents = format!(
+        "{base}\n[[application.databases]]\nname = \"main\"\nkind = \"mariadb\"\nurl_env = \"TEST_DATABASE_URL\"\nconsistency = {{ logical = {{ format = \"sql\" }} }}\n",
+    );
+    std::fs::write(&fixture.config, contents).expect("config");
+
+    // On Windows the tools run inside the mariadb image via shims. The
+    // mariadb:11.3 image renamed its tools (recorded: `mysqldump` is not
+    // found — the names are `mariadb-dump` and `mariadb`).
+    let shim = |name: &str, tool: &str| -> PathBuf {
+        let path = fixture._dir.path().join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "@echo off\r\ndocker run --rm -i -e MYSQL_PWD=%MYSQL_PWD% mariadb:11.3 {tool} %*\r\n"
+            ),
+        )
+        .expect("shim");
+        path
+    };
+
+    let mut backup_cmd = vaultline();
+    backup_cmd
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .env("TEST_DATABASE_URL", &db_url);
+    if cfg!(windows) {
+        backup_cmd.env("VAULTLINE_MYSQLDUMP", shim("mysqldump.cmd", "mariadb-dump"));
+    }
+    backup_cmd.assert().success();
+
+    let mut restore_cmd = vaultline();
+    restore_cmd
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(&fixture.restore_target)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .env("TEST_DATABASE_URL", &db_url);
+    if cfg!(windows) {
+        restore_cmd.env("VAULTLINE_MYSQL", shim("mysql.cmd", "mariadb"));
+    }
+    restore_cmd
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("restore complete"));
+
+    let count = exec(&[
+        "mariadb",
+        "-uroot",
+        "-N",
+        "test2",
+        "-e",
+        "SELECT COUNT(*) FROM t;",
+    ]);
+    let out = String::from_utf8_lossy(&count.stdout);
+    assert!(count.status.success(), "{out}");
+    assert!(out.trim() == "3", "restored row count: {out}");
+
+    let source_still = exec(&[
+        "mariadb",
         "-uroot",
         "-N",
         "test",

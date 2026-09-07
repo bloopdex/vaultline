@@ -184,7 +184,7 @@ pub fn run_schedule(args: ScheduleRunArgs) -> Result<()> {
         // Record the attempt first — a failing verification must not
         // hot-loop on every invocation until the next occurrence.
         {
-            let _lock = StateLock::acquire(&state_dir)?;
+            let _lock = StateLock::acquire_with(&state_dir, &crate::backup::process_is_alive)?;
             let mut state = State::load(&state_path)?;
             state
                 .applications

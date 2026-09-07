@@ -3,19 +3,7 @@
 Each limitation in the four-part form: what is missing / why / what
 happens instead / what would remove it.
 
-## MySQL/MariaDB is proven by the round trip; MariaDB itself is not
-
-- **What is missing**: the MySQL restore round trip is proven (dump →
-  mysql client into a second database → rows verified, source
-  untouched); MariaDB — the other member of the `mysql`/`mariadb` kind
-  pair — has never been run against its own server.
-- **Why**: the engines share the dump tool and the wire protocol; a
-  MariaDB testcontainer is one module swap away, and the round trip
-  already pinned one real bug (the `--databases` flag embedded CREATE
-  DATABASE/USE in dumps, overriding declared restore targets).
-- **What happens instead**: MariaDB definitions run through the same
-  mysqldump path as MySQL.
-- **What would remove it**: a MariaDB testcontainer round trip.
+## MariaDB and MySQL are both proven by round trips
 
 ## Volume sidecar / pause-first semantics are declared, not captured
 
@@ -73,19 +61,19 @@ happens instead / what would remove it.
 - **What would remove it**: `Start-Service ssh-agent` on the dev
   machine (user decision).
 
-## Rehearsal directories of forgotten snapshots are not cleaned
+## Lock liveness uses pid reuse's accepted trade-off
 
-- **What is missing**: `backup prune` forgets engine snapshots but does
-  not remove their `<rehearsal.target>/.vaultline-rehearsal/<id>/`
-  directories — old rehearsal layouts accumulate on the rehearsal host.
-- **Why**: the per-snapshot rehearsal directory holds only vaultline's
-  own rehearsal artifacts (never user data), so cleanup is hygiene, not
-  safety; the executor already clears a directory before re-rehearsing
-  the same snapshot.
-- **What happens instead**: each snapshot's rehearsal is cleared on its
-  own next rehearsal; forgotten snapshots keep their last layout.
-- **What would remove it**: pruning the rehearsal directories of
-  forgotten snapshots in `backup prune --apply` (Phase 7 candidate).
+- **What is missing**: stale-lock recovery (ADR-007) decides "dead" by
+  pid liveness; a reused pid (a new unrelated process that inherited
+  the crashed process's pid) would read as a live holder and refuse the
+  run until manual removal.
+- **Why**: plain-file locking with pid records is the boring,
+  dependency-free contract; process start times would need per-platform
+  OS APIs.
+- **What happens instead**: the refusal names the lock file and the
+  manual fix; the liveness probe is fail-safe (unanswerable = alive).
+- **What would remove it**: a lock scheme with per-holder tokens or
+  start-time verification (revisit condition in ADR-007).
 
 ## Cross-platform restore is not supported
 

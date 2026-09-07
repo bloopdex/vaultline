@@ -113,6 +113,19 @@ operations record). `vaultline-cli::ops` is `doctor`/`status` (read-only
 diagnosis). `vaultline-cli::timer` generates the systemd units
 (service+timer per declared schedule, cron → OnCalendar, Persistent).
 
+The reliability layer (ADR-007): the state lock gains liveness-based
+stale-lock recovery (dead holder → reclaim with a warning; alive →
+refused; the probe is injected CLI-side so core stays process-I/O-free);
+the backup pre-flights every declared capture path (a vanished source
+aborts — restic skips missing paths silently, verified empirically);
+the rehearsal's staging and promotion both live under the per-snapshot
+rehearsal directory; tree removal is robust on Windows (ACL reset +
+attribute clear + retry — restic-restored directories carry
+mode-derived restrictive ACLs, the same root cause as its
+restore-timestamp quirk). The benchmark baseline lives in
+examples/bench.rs with docs/benchmarks/baseline.json and
+scripts/bench-check.py.
+
 ## State
 
 Plain files, per ADR-003: `state.json` (schema version 1) records

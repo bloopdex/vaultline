@@ -49,6 +49,34 @@ pub struct BackupListArgs {
     pub json: bool,
 }
 
+/// Whether the process with the given pid is alive on this host
+/// (ADR-007, the stale-lock liveness check). Fail-safe: when the
+/// platform probe cannot run, the answer is "alive" — a lock is never
+/// reclaimed without evidence of the holder's death.
+pub fn process_is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(true)
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+            .unwrap_or(true)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
 /// The state directory: `VAULTLINE_STATE_DIR` overrides, else the platform
 /// data directory (e.g. `~/.local/state/vaultline` on Linux,
 /// `%LOCALAPPDATA%\vaultline` on Windows).
@@ -274,7 +302,7 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
     let app = config::load(&args.config)?;
 
     let state_dir = state_dir()?;
-    let _lock = StateLock::acquire(&state_dir)?;
+    let _lock = StateLock::acquire_with(&state_dir, &process_is_alive)?;
     let restic = Restic::locate()?;
     let password = resolve_password(&app)?;
     let repo = repo_url(&app)?;
@@ -383,6 +411,23 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
                 warn!(note, "volume capture semantics deferred");
                 honesty_notes.push(note);
             }
+        }
+    }
+
+    // The vanished-source defense (ADR-007): restic SKIPS missing paths
+    // silently ("does not exist, skipping" — verified empirically,
+    // 2026-09-07), which would produce a silently-incomplete snapshot.
+    // Every declared capture path is existence-checked first: a vanished
+    // source aborts the backup naming the path.
+    for path in &backup_paths {
+        if !path.exists() {
+            return Err(VaultlineError::new(
+                ErrorKind::Operational,
+                format!(
+                    "source path {} does not exist (it vanished or the definition points nowhere) — the backup is aborted rather than recording an incomplete snapshot",
+                    path.display()
+                ),
+            ));
         }
     }
 

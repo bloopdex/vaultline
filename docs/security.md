@@ -109,7 +109,24 @@ threat → boundary → defense → status.
   snapshot and the verification schedule executing it.
 - **Status**: enforced — L1–L6 execute on demand and on schedule (L6
   is the full recovery rehearsal, ADR-006), the reached level is
-  recorded durably, and the disaster scenario is pinned by tests.
+  recorded durably, and the disaster scenario is pinned by tests. The
+  vanished-source defense (ADR-007) guarantees a backup never claims a
+  source it did not capture: missing paths abort before the engine
+  runs.
+
+## Reliability of destructive actions (ADR-007)
+
+- **Threat**: a crashed run wedging every future run (stale lock), a
+  vanished source producing a silently-incomplete snapshot, or a
+  rehearsal colliding with another snapshot's layout.
+- **Boundary**: the state lock, the backup pre-flight, the rehearsal
+  executor.
+- **Defense**: locks are reclaimed only on evidence of the holder's
+  death (liveness probe; unanswerable counts as alive); capture paths
+  are existence-checked before the engine runs; staging and promotion
+  both live under the per-snapshot rehearsal directory.
+- **Status**: enforced and integration-tested (live-holder refusal,
+  dead-holder reclaim, vanished-source abort, rehearsal isolation).
 
 ## Destructive actions (prune)
 

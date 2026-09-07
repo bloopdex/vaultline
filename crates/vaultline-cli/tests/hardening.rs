@@ -115,9 +115,13 @@ impl L6Fixture {
         let restore_target = dir.path().join("restored");
         let rehearsal_root = dir.path().join("rehearsal");
         // The rehearsed file: {restore_target}/uploads/hello.txt mirrored
-        // under the rehearsal root.
-        let rehearsed_file =
-            remapped_under(&rehearsal_root, &restore_target).join("uploads/hello.txt");
+        // under the per-snapshot rehearsal dir — the check runs with that
+        // dir as CWD, so it embeds the RELATIVE form.
+        let rehearsed_file = remapped_under(&rehearsal_root, &restore_target)
+            .join("uploads/hello.txt")
+            .strip_prefix(&rehearsal_root)
+            .expect("under the root")
+            .to_path_buf();
         // Windows executes only files it recognizes — the check script
         // needs the .cmd extension there.
         let check = dir
@@ -247,10 +251,24 @@ fn l6_rehearsal_verifies_checks_and_records() {
         ));
 
     assert_eq!(fixture.snapshot_level(), "L6");
-    // The rehearsed layout exists under the root: the procedure's target
-    // was mirrored, not the live path.
-    let rehearsed =
-        remapped_under(&fixture.rehearsal_root, &fixture.restore_target).join("uploads/hello.txt");
+    // The rehearsed layout exists under the per-snapshot rehearsal dir:
+    // the procedure's target was mirrored, not the live path.
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.state_dir().join("state.json")).expect("state file"),
+    )
+    .expect("state parses");
+    let latest_id = state["applications"]["thornwa"]["snapshots"][0]["id"]
+        .as_str()
+        .expect("id")
+        .to_string();
+    let rehearsed = remapped_under(
+        &fixture
+            .rehearsal_root
+            .join(".vaultline-rehearsal")
+            .join(&latest_id),
+        &fixture.restore_target,
+    )
+    .join("uploads/hello.txt");
     assert!(
         rehearsed.exists(),
         "rehearsed file missing at {}",
@@ -314,6 +332,73 @@ fn schedule_run_at_l6_rehearses() {
         .stdout(predicate::str::contains("verification reached L6"));
 
     assert_eq!(fixture.snapshot_level(), "L6");
+}
+
+/// Prune cleans the forgotten snapshots' rehearsal directories (the
+/// Phase 7 candidate): after `prune --apply`, the forgotten snapshot's
+/// `<target>/.vaultline-rehearsal/<id>/` is gone while the kept
+/// snapshot's rehearsal remains.
+#[test]
+fn prune_removes_forgotten_rehearsal_directories() {
+    if restic_bin().is_none() || sqlite3_bin().is_none() {
+        eprintln!("skipping: restic or sqlite3 not available");
+        return;
+    }
+    let fixture = L6Fixture::new(true);
+
+    // Two snapshots, each rehearsed (the rehearsal creates its directory).
+    fixture.backup();
+    vaultline()
+        .args(["backup", "verify", "latest", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success();
+    fixture.backup();
+    vaultline()
+        .args(["backup", "verify", "latest", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success();
+
+    let state_path = fixture.state_dir().join("state.json");
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("json");
+    let snapshots = state["applications"]["thornwa"]["snapshots"]
+        .as_array()
+        .expect("snapshots");
+    assert_eq!(snapshots.len(), 2);
+    let older_id = snapshots[0]["id"].as_str().expect("id").to_string();
+    let newer_id = snapshots[1]["id"].as_str().expect("id").to_string();
+    let rehearsal_dir = |id: &str| fixture.rehearsal_root.join(".vaultline-rehearsal").join(id);
+    assert!(rehearsal_dir(&older_id).exists(), "older rehearsed");
+    assert!(rehearsal_dir(&newer_id).exists(), "newer rehearsed");
+
+    // keep_last 1: the older snapshot is forgotten WITH its rehearsal.
+    let mut config = std::fs::read_to_string(&fixture.config).expect("config");
+    config = config.replace("keep_last = 14", "keep_last = 1");
+    std::fs::write(&fixture.config, config).expect("config");
+    vaultline()
+        .args(["backup", "prune", "--config"])
+        .arg(&fixture.config)
+        .arg("--apply")
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 rehearsal director"));
+
+    assert!(
+        !rehearsal_dir(&older_id).exists(),
+        "the forgotten snapshot's rehearsal must be removed"
+    );
+    assert!(
+        rehearsal_dir(&newer_id).exists(),
+        "the kept snapshot's rehearsal must remain"
+    );
 }
 
 /// The malicious-archive defense: a symlink inside the snapshot pointing

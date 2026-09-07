@@ -1,0 +1,7 @@
+{
+  "note": "Baseline measured 2026-09-07, release build, Windows 11 Pro (10.0.26200), medians of n runs. scripts/bench-check.py flags any metric above 3x its baseline.",
+  "config_load_validate": 0.0282,
+  "cron_next_after": 0.0003,
+  "retention_plan_1000": 0.4429,
+  "state_roundtrip_1000": 8.6869
+}

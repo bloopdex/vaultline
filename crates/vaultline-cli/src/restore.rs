@@ -456,7 +456,10 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
         return Ok(());
     }
 
-    let _lock = vaultline_core::state::StateLock::acquire(&crate::backup::state_dir()?)?;
+    let _lock = vaultline_core::state::StateLock::acquire_with(
+        &crate::backup::state_dir()?,
+        &crate::backup::process_is_alive,
+    )?;
     let restic = Restic::locate()?;
     let password = resolve_password(&app)?;
     let repo = repo_url(&app)?;
@@ -513,7 +516,18 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
     }
 
     let (restored_files, restored_databases, restored_volumes) =
-        execute_steps(&app, &restored_root, None)?;
+        execute_steps(&app, &restored_root, None).map_err(|e| {
+            // The partial-restore guidance (ADR-007): promotion may have
+            // stopped part-way. The never-overwrite contract means a
+            // retry into this target would collide on what was already
+            // promoted — the operator must know.
+            VaultlineError::new(
+                ErrorKind::Operational,
+                format!(
+                    "{e} (the restore stopped part-way: earlier steps may have promoted content; vaultline never overwrites, so retry into a fresh target or remove the promoted content first)"
+                ),
+            )
+        })?;
 
     let duration_ms = started.elapsed().as_millis() as u64;
     metrics::emit_u64("restore_duration_ms", duration_ms);
@@ -707,6 +721,68 @@ fn run_app_checks(app: &Application, root: &Path) -> Result<Vec<String>> {
     Ok(notes)
 }
 
+/// Remove a directory tree robustly. On Windows, restic-restored
+/// directories carry mode-derived restrictive ACLs — the same root
+/// cause as its restore-timestamp "Access is denied" quirk recorded in
+/// the suite: not even the read-only attribute can be changed on them
+/// (verified empirically). The owner can reset the ACLs (icacls
+/// /reset), after which the read-only attributes clear and
+/// `remove_dir_all` succeeds. Transient locks (antivirus real-time
+/// scans on freshly written files) get a brief retry. Elsewhere this is
+/// a plain `remove_dir_all`.
+pub(crate) fn remove_tree_robust(path: &Path) -> std::io::Result<()> {
+    let mut last_error = None;
+    for _ in 0..5 {
+        #[cfg(windows)]
+        make_tree_removable(path);
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_error = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+    Err(last_error.expect("an attempt ran"))
+}
+
+#[cfg(windows)]
+fn make_tree_removable(dir: &Path) {
+    // ACL reset first (best effort — the owner can always reset; if
+    // not, the removal failure reports it), then clear read-only
+    // attributes depth-first.
+    let _ = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(["/reset", "/t", "/c", "/q"])
+        .output();
+    let _ = clear_readonly_attributes(dir);
+}
+
+#[cfg(windows)]
+// The permissions-set-readonly-false lint warns about Unix
+// world-writability; this is Windows-only code where set_readonly(false)
+// clears FILE_ATTRIBUTE_READONLY — exactly the intent.
+#[allow(clippy::permissions_set_readonly_false)]
+fn clear_readonly_attributes(dir: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            continue; // never follow links, even for cleanup
+        }
+        if metadata.is_dir() {
+            clear_readonly_attributes(&path)?;
+        }
+        if metadata.permissions().readonly() {
+            let mut permissions = metadata.permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&path, permissions)?;
+        }
+    }
+    Ok(())
+}
+
 /// The L6 executor: a full recovery rehearsal into the declared scratch
 /// root — `<target>/.vaultline-rehearsal/<snapshot-id>/` with the
 /// procedure's path targets mirrored under the root — then the app
@@ -733,7 +809,7 @@ fn run_rehearsal(
             dir = %run_dir.display(),
             "clearing this snapshot's previous rehearsal"
         );
-        std::fs::remove_dir_all(&run_dir).map_err(|e| {
+        remove_tree_robust(&run_dir).map_err(|e| {
             VaultlineError::with_source(
                 ErrorKind::Io,
                 format!(
@@ -771,16 +847,20 @@ fn run_rehearsal(
         extra_envs,
         &restored_root,
     )?;
-    let (files, databases, volumes) = execute_steps(app, &restored_root, Some(root_path))?;
+    // The remap root is THIS snapshot's rehearsal directory — staging and
+    // promotion both live here, so rehearsals of different snapshots
+    // never collide on the mirrored layout. The app checks run with this
+    // directory as CWD and VAULTLINE_REHEARSAL_DIR.
+    let (files, databases, volumes) = execute_steps(app, &restored_root, Some(&run_dir))?;
 
     let mut notes = vec![format!(
         "L6: rehearsed {} file(s), {} database(s), {} volume(s) under {}",
         files,
         databases.len(),
         volumes,
-        root.target
+        run_dir.display()
     )];
-    notes.extend(run_app_checks(app, root_path)?);
+    notes.extend(run_app_checks(app, &run_dir)?);
     Ok(notes)
 }
 
@@ -1156,7 +1236,10 @@ pub fn run_verify(args: BackupVerifyArgs) -> Result<()> {
     let app = config::load(&args.config)?;
     let state_dir = crate::backup::state_dir()?;
     let state_path = state_dir.join("state.json");
-    let _lock = vaultline_core::state::StateLock::acquire(&state_dir)?;
+    let _lock = vaultline_core::state::StateLock::acquire_with(
+        &state_dir,
+        &crate::backup::process_is_alive,
+    )?;
     let mut state = State::load(&state_path)?;
     let snapshot = select_snapshot(&state, &app.name, &args.snapshot)?.clone();
 

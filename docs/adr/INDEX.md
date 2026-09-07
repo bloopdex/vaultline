@@ -13,3 +13,4 @@ lives in the project graph; the repository is the durable home).
 | [004](004-storage-abstraction.md) | Storage abstraction: WHAT vs WHERE, backend order (ADR-V0-4) | accepted |
 | [005](005-operations-scheduling.md) | Operations & scheduling: cron execution, explainable retention, prune safety, systemd timers (ADR-V0-5) | accepted |
 | [006](006-l6-rehearsal-and-app-checks.md) | L6 rehearsal automation, executable app checks, and the hardening layer (ADR-V0-6) | accepted |
+| [007](007-reliability-and-performance.md) | Reliability & performance: stale-lock recovery, vanished-source defense, rehearsal isolation, the benchmark baseline (ADR-V0-7) | accepted |

@@ -497,6 +497,108 @@ fn timer_install_refuses_off_linux() {
         .stderr(predicate::str::contains("Linux-only"));
 }
 
+/// The stale-lock recovery (ADR-007): a lock whose recorded holder pid
+/// is ALIVE refuses the run; the same lock, once the holder died, is
+/// reclaimed with a warning and the run proceeds — a crashed backup no
+/// longer wedges every future run.
+#[test]
+fn stale_lock_is_refused_while_alive_and_reclaimed_when_dead() {
+    let Some(mut cmd) = op_cmd() else {
+        eprintln!("skipping: restic not available (VAULTLINE_RESTIC_BIN or PATH)");
+        return;
+    };
+    let fixture = Fixture::new();
+
+    // A live holder: a sleeping child process whose pid the lock records.
+    let mut holder = if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > nul"])
+            .spawn()
+            .expect("holder")
+    } else {
+        Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .expect("holder")
+    };
+    std::fs::create_dir_all(fixture.state_dir()).expect("state dir");
+    std::fs::write(
+        fixture.state_dir().join("lock"),
+        format!(
+            "pid {}
+",
+            holder.id()
+        ),
+    )
+    .expect("lock file");
+
+    // The holder is alive: the run refuses.
+    cmd.args(["backup", "run", "--config"]).arg(&fixture.config);
+    fixture.envs(&mut cmd);
+    cmd.assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("another vaultline process"));
+
+    // The holder dies: the next run reclaims the stale lock and proceeds.
+    let _ = holder.kill();
+    let _ = holder.wait();
+    let mut recovered = vaultline();
+    fixture.envs(&mut recovered);
+    recovered
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("reclaiming the stale lock"))
+        .stdout(predicate::str::contains("backup complete"));
+}
+
+/// The vanished-source defense (ADR-007): restic skips missing paths
+/// silently (verified empirically), so a declared source that vanished
+/// must abort the backup naming the path — never a silently-incomplete
+/// snapshot.
+#[test]
+fn vanished_source_aborts_the_backup() {
+    let Some(mut cmd) = op_cmd() else {
+        eprintln!("skipping: restic not available (VAULTLINE_RESTIC_BIN or PATH)");
+        return;
+    };
+    let fixture = Fixture::new();
+    // Append a second files source that does not exist.
+    let mut config = std::fs::read_to_string(&fixture.config).expect("config");
+    config.push_str(
+        "
+[[application.sources.files]]
+name = \"vanished\"
+paths = [\"/definitely/not/here-vaultline\"]
+",
+    );
+    std::fs::write(&fixture.config, config).expect("config");
+
+    cmd.args(["backup", "run", "--config"]).arg(&fixture.config);
+    fixture.envs(&mut cmd);
+    cmd.assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("vanished"));
+
+    // No snapshot was recorded — the failed run left nothing behind.
+    let state_path = fixture.state_dir().join("state.json");
+    if state_path.exists() {
+        let state: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state"))
+                .expect("json");
+        assert_eq!(
+            state["applications"]["thornwa"]["snapshots"]
+                .as_array()
+                .expect("snapshots")
+                .len(),
+            0
+        );
+    }
+}
+
 /// validate rejects invalid crons and both-restricted day fields.
 #[test]
 fn validate_rejects_bad_schedules() {
