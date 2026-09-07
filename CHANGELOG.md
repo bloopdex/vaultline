@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.0 — 2026-09-07
+
+Restore and verification — the restore-first promise is executable:
+
+- **`vaultline restore`** executes the definition's restore procedure,
+  sandbox-then-promote: the snapshot is restored by restic into a
+  staging area under the target, then each step promotes content into
+  its declared destination — files copied with directories created and
+  **existing files never overwritten** (a collision is an error naming
+  the file), databases restored through their engine's tool (pg_restore
+  / mysql, both fed by stdin — the dump never appears on argv), volumes
+  copied, health endpoints polled. `--dry-run` prints the plan and
+  writes nothing; `--verify` adds the restore-side SQLite checks.
+- **`vaultline backup verify`** proves a snapshot against the policy:
+  L3 (the engine still holds the snapshot — short-id aware), L4
+  (recursive content comparison of restored files against the live
+  files; any mismatch fails), L5 (SQLite restore rehearsal with
+  integrity_check) — and records the level actually reached durably in
+  the state file.
+- **`vaultline backup inspect`** shows a snapshot's full record.
+- Snapshot selectors: full id, unique prefix, or `latest`.
+- Metrics: restore_duration_ms, restore_rehearsals_run,
+  restore_rehearsal_failures.
+- Integration proof: the disaster end-to-end (backup → destroy →
+  restore → data and database intact), the PostgreSQL pg_restore round
+  trip (dump restored into a second database, row count verified), L4
+  tamper detection, L5 SQLite rehearsal, the no-overwrite contract.
+- Docs updated; limitations narrowed (scheduling, prune, and
+  cross-platform restore remain).
+
 ## 0.3.0 — 2026-09-07
 
 Database capture and storage backends:

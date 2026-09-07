@@ -83,6 +83,17 @@ API — never `cp` of a WAL-mode database). A failed dump aborts the
 backup: a snapshot never claims database coverage a dump did not
 produce.
 
+`vaultline-cli::restore` is the recovery executor: restore-first by
+construction. The whole snapshot is restored by restic into a staging
+area under the target, then the procedure's steps promote content into
+their declared destinations (never overwriting), databases are restored
+through their engine's tool (pg_restore / mysql, both fed by stdin —
+no dump path on argv), volumes are copied, health endpoints polled. The
+verification executor (`backup verify`) proves snapshots against the
+policy — L3 engine cross-check, L4 recursive content comparison against
+live files, L5 SQLite rehearsal — and records the level actually
+reached durably in the state file.
+
 ## State
 
 Plain files, per ADR-003: `state.json` (schema version 1) records

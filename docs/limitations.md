@@ -68,32 +68,38 @@ happens instead / what would remove it.
 - **What would remove it**: MinIO and SFTP testcontainers in the
   container harness.
 
-## Verification beyond L2 is not executed
+## Verification scheduling and L6 automation are not executed
 
-- **What is missing**: the verification policy's schedule and app checks
-  are recorded but not executed, and levels L3–L6 (metadata verification,
-  file restore rehearsal, database restore rehearsal, the full recovery
-  test) have no executor.
-- **Why**: L4–L6 require restore machinery; scheduling requires the
-  operations phase. L1–L2 run inline on every backup whose policy
-  demands them.
-- **What happens instead**: every backup records the level actually
-  reached (L1 or L2) in the snapshot's integrity record — the
-  created-vs-proven-restorable distinction is preserved honestly.
-- **What would remove it**: the restore & verification phase (L3–L6) and
-  the scheduling integration.
+- **What is missing**: `verification.schedule` and
+  `verification.app_checks` are recorded but not executed; the full L6
+  recovery test has no scheduler (it is exercised manually through
+  `vaultline restore --verify`, and the disaster scenario is pinned by
+  the integration suite).
+- **Why**: scheduling is the operations phase; L6 rehearsal requires a
+  scratch application environment. L1–L4 and SQLite L5 execute on
+  demand (`backup verify`, `restore --verify`).
+- **What happens instead**: every snapshot records the level actually
+  reached; `backup verify` updates it durably.
+- **What would remove it**: the scheduling integration (systemd timer).
 
-## Retention, prune, and restore are declared, not executed
+## Retention and prune are declared, not executed
 
 - **What is missing**: the retention policy is validated but no `prune`
-  command exists; the restore procedure is validated (references must
-  resolve) but no `restore` command executes it.
-- **Why**: retention explainability and restore-first design are
-  downstream of the backup path, which this phase established; prune and
-  restore are the operations and restore phases.
-- **What happens instead**: nothing deletes snapshots (the safe default),
-  and every snapshot carries its restore metadata so future restores
-  inherit it.
+  command exists — nothing deletes snapshots.
+- **Why**: retention explainability (per-snapshot keep/delete reasons)
+  is the operations phase; the safe default is to keep everything.
+- **What happens instead**: snapshots accumulate; the policy is carried
+  in every snapshot's definition so future pruning is well-defined.
 - **What would remove it**: the `prune` command with per-snapshot
-  retention explanations, and the `restore` command executing the
-  procedure (restore-to-sandbox first).
+  retention explanations.
+
+## Cross-platform restore is not supported
+
+- **What is missing**: a snapshot taken on one OS restores on the same
+  OS only (path translation maps Windows drive paths to their stored
+  `/C/...` form; Unix paths map 1:1).
+- **Why**: the VPS story is Linux-to-Linux; cross-platform path mapping
+  is a distinct problem with no current user.
+- **What happens instead**: restored paths that do not exist in the
+  snapshot fail with an explicit error naming the path.
+- **What would remove it**: a path-mapping table per backup host.

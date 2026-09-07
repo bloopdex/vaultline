@@ -27,13 +27,13 @@ Emitted today, by `backup run`:
 | `verification_level_reached` | highest level actually reached for the snapshot |
 | `backup_files_new` | files newly added to the repository (from restic's summary) |
 | `backup_bytes_processed` | bytes processed (from restic's summary) |
+| `restore_rehearsals_run` | 1 per completed restore or verification rehearsal |
+| `restore_rehearsal_failures` | 1 when a rehearsal's verification fails |
+| `restore_duration_ms` | wall time of a restore |
 
 Designed for the phases that produce them (names stable, not yet
 emitted):
 
 | Metric | Meaning |
 |---|---|
-| `restore_rehearsals_run` | restore-rehearsal runs completed |
-| `restore_rehearsal_failures` | rehearsals that did not prove restorability |
-| `restore_duration_ms` | wall time of a restore/rehearsal |
 | `prune_kept` / `prune_deleted` | snapshots retained / deleted by a prune, with the per-snapshot reason recorded in the log |

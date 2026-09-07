@@ -41,7 +41,10 @@ threat → boundary → defense → status.
 - **Defense**: restore-to-sandbox first, explicit promotion second — the
   restore procedure (ADR-003) is target-aware by design, and destructive
   actions are explicit, never implicit.
-- **Status**: designed; enforced when restore execution lands.
+- **Status**: enforced — the executor stages the whole snapshot under
+  `.vaultline/<id>/`, promotes only what the procedure declares, and
+  **never overwrites an existing file** (a collision is an error naming
+  the file; the contract is integration-tested).
 
 ## Subprocess safety
 
