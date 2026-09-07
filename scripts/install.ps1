@@ -39,7 +39,7 @@ Invoke-WebRequest -Uri "$urlBase/$asset" -OutFile (Join-Path $temp $asset)
 $expected = (Select-String -Path (Join-Path $temp "SHA256SUMS") -Pattern $asset -SimpleMatch).Line.Split(" ")[0]
 $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $temp $asset)).Hash.ToLower()
 if ($actual -ne $expected) {
-    Write-Error "checksum mismatch for $asset: expected $expected, got $actual - the download is not installed"
+    Write-Error "checksum mismatch for ${asset}: expected $expected, got $actual - the download is not installed"
     exit 1
 }
 Write-Host "checksum verified: $actual"
