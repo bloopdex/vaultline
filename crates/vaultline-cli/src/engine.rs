@@ -116,6 +116,51 @@ impl Restic {
         }
     }
 
+    /// Run an arbitrary restic command with fixed arguments (argv only —
+    /// the caller passes complete arguments, never fragments of a shell
+    /// command).
+    pub fn run(
+        &self,
+        fixed: &[&str],
+        values: &[String],
+        repo: &str,
+        password: &str,
+        extra_envs: &[(String, String)],
+    ) -> Result<std::process::Output> {
+        let mut command = self.command(password, extra_envs);
+        command.arg("-r").arg(repo);
+        command.args(fixed);
+        command.args(values);
+        command.output().map_err(|e| self.spawn_error(e))
+    }
+
+    /// List the engine's snapshots (`snapshots --json`). The output is a
+    /// single JSON array on one line; each element is one snapshot.
+    pub fn list_snapshots(
+        &self,
+        repo: &str,
+        password: &str,
+        extra_envs: &[(String, String)],
+    ) -> Result<Vec<Value>> {
+        let output = self
+            .command(password, extra_envs)
+            .arg("-r")
+            .arg(repo)
+            .args(["--json", "snapshots"])
+            .output()
+            .map_err(|e| self.spawn_error(e))?;
+        self.ensure_success(&output, password)?;
+        let mut snapshots = Vec::new();
+        for line in parse_json_lines(&output.stdout) {
+            if let Value::Array(items) = line {
+                snapshots.extend(items);
+            } else {
+                snapshots.push(line);
+            }
+        }
+        Ok(snapshots)
+    }
+
     /// Run a backup: the given paths enter the repository, the given glob
     /// patterns are excluded. Returns the engine's summary.
     pub fn backup(

@@ -52,7 +52,7 @@ pub struct BackupListArgs {
 /// The state directory: `VAULTLINE_STATE_DIR` overrides, else the platform
 /// data directory (e.g. `~/.local/state/vaultline` on Linux,
 /// `%LOCALAPPDATA%\vaultline` on Windows).
-fn state_dir() -> Result<PathBuf> {
+pub fn state_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("VAULTLINE_STATE_DIR") {
         return Ok(PathBuf::from(dir));
     }
@@ -69,7 +69,7 @@ fn state_dir() -> Result<PathBuf> {
 
 /// Resolve the repository password from the environment variable named by
 /// the definition. Never from the configuration file.
-fn resolve_password(app: &Application) -> Result<String> {
+pub fn resolve_password(app: &Application) -> Result<String> {
     std::env::var(&app.storage.password_env).map_err(|_| {
         VaultlineError::new(
             ErrorKind::Config,
@@ -83,7 +83,7 @@ fn resolve_password(app: &Application) -> Result<String> {
 
 /// The restic repository URL for the declared storage target (ADR-V0-4:
 /// thin adapters — restic's own backends carry the connectivity).
-fn repo_url(app: &Application) -> Result<String> {
+pub fn repo_url(app: &Application) -> Result<String> {
     let repo = app.storage.repository.as_deref().unwrap_or(&app.name);
     match &app.storage.kind {
         StorageKind::Local { path } => Ok(format!("{}/{}", path.trim_end_matches('/'), repo)),
@@ -111,7 +111,7 @@ fn repo_url(app: &Application) -> Result<String> {
 
 /// Environment variables restic needs for non-local backends (credential
 /// names resolved from the environment, values forwarded — never literals).
-fn storage_envs(app: &Application) -> Result<Vec<(String, String)>> {
+pub fn storage_envs(app: &Application) -> Result<Vec<(String, String)>> {
     match &app.storage.kind {
         StorageKind::Local { .. } => Ok(Vec::new()),
         StorageKind::S3Compatible {
@@ -228,7 +228,7 @@ fn run_quiesce(name: &str, quiesce: &vaultline_core::model::Quiesce) -> Result<(
 /// exists is used as-is; otherwise the name is treated as a Docker volume
 /// and its mountpoint is resolved via `docker volume inspect` (the
 /// sidecar / pause-first semantics remain deferred).
-fn resolve_volume_path(name: &str) -> Result<PathBuf> {
+pub fn resolve_volume_path(name: &str) -> Result<PathBuf> {
     let candidate = Path::new(name);
     if candidate.exists() {
         return Ok(candidate.to_path_buf());

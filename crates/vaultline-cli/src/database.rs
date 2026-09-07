@@ -294,63 +294,21 @@ fn stderr_tail(stderr: &[u8]) -> String {
     text.lines().rev().take(3).collect::<Vec<_>>().join(" | ")
 }
 
-/// PostgreSQL: dump to the staging file via stdout capture; authentication
-/// through a temporary PGPASSFILE so the password never reaches argv.
-fn capture_postgresql(name: &str, conn: &ConnInfo, dump_path: &Path) -> Result<()> {
-    let pg_dump = locate_tool("VAULTLINE_PGDUMP", "pg_dump")?;
-    let mut auth = PgAuth::None;
-    if let Some(password) = &conn.password {
-        auth = PgAuth::write_passfile(conn, password)?;
-    }
-    info!(database = name, tool = %pg_dump.display(), "running pg_dump");
-    let mut command = Command::new(&pg_dump);
-    command
-        .args(["--format=custom", "--dbname"])
-        .arg(conn.sanitized());
-    if let PgAuth::PassFile { env, .. } = &auth {
-        command.env("PGPASSFILE", env);
-    }
-    let output = command.output().map_err(|e| {
-        VaultlineError::with_source(
-            ErrorKind::Operational,
-            format!(
-                "cannot start pg_dump ({}): install it or set VAULTLINE_PGDUMP",
-                pg_dump.display()
-            ),
-            e,
-        )
-    })?;
-    if !output.status.success() {
-        return Err(VaultlineError::new(
-            ErrorKind::Operational,
-            format!(
-                "pg_dump failed for database \"{name}\": {}",
-                stderr_tail(&output.stderr)
-            ),
-        ));
-    }
-    std::fs::write(dump_path, &output.stdout).map_err(|e| {
-        VaultlineError::with_source(
-            ErrorKind::Io,
-            format!("cannot write the dump file {}", dump_path.display()),
-            e,
-        )
-    })
+/// A temporary PostgreSQL password file (the pgpass format:
+/// host:port:dbname:user:password), created only when the connection has a
+/// password. Removed when dropped.
+pub struct PgPassfile {
+    _file: tempfile::NamedTempFile,
+    path: PathBuf,
 }
 
-/// Where PostgreSQL authentication comes from: nothing (trust auth), or a
-/// temporary passfile whose contents follow the pgpass format
-/// (host:port:dbname:user:password).
-enum PgAuth {
-    None,
-    PassFile {
-        _file: tempfile::NamedTempFile,
-        env: PathBuf,
-    },
-}
-
-impl PgAuth {
-    fn write_passfile(conn: &ConnInfo, password: &str) -> Result<Self> {
+impl PgPassfile {
+    /// Create the passfile for a parsed connection, or `None` for
+    /// passwordless (trust) connections.
+    pub fn for_conninfo(conn: &ConnInfo) -> Result<Option<Self>> {
+        let Some(password) = &conn.password else {
+            return Ok(None);
+        };
         let mut file = tempfile::NamedTempFile::new().map_err(|e| {
             VaultlineError::with_source(ErrorKind::Io, "cannot create the PGPASSFILE", e)
         })?;
@@ -383,9 +341,54 @@ impl PgAuth {
         file.flush().map_err(|e| {
             VaultlineError::with_source(ErrorKind::Io, "cannot write the PGPASSFILE", e)
         })?;
-        let env = file.path().to_path_buf();
-        Ok(PgAuth::PassFile { _file: file, env })
+        let path = file.path().to_path_buf();
+        Ok(Some(Self { _file: file, path }))
     }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// PostgreSQL: dump to the staging file via stdout capture; authentication
+/// through a temporary PGPASSFILE so the password never reaches argv.
+fn capture_postgresql(name: &str, conn: &ConnInfo, dump_path: &Path) -> Result<()> {
+    let pg_dump = locate_tool("VAULTLINE_PGDUMP", "pg_dump")?;
+    let auth = PgPassfile::for_conninfo(conn)?;
+    info!(database = name, tool = %pg_dump.display(), "running pg_dump");
+    let mut command = Command::new(&pg_dump);
+    command
+        .args(["--format=custom", "--dbname"])
+        .arg(conn.sanitized());
+    if let Some(passfile) = &auth {
+        command.env("PGPASSFILE", passfile.path());
+    }
+    let output = command.output().map_err(|e| {
+        VaultlineError::with_source(
+            ErrorKind::Operational,
+            format!(
+                "cannot start pg_dump ({}): install it or set VAULTLINE_PGDUMP",
+                pg_dump.display()
+            ),
+            e,
+        )
+    })?;
+    if !output.status.success() {
+        return Err(VaultlineError::new(
+            ErrorKind::Operational,
+            format!(
+                "pg_dump failed for database \"{name}\": {}",
+                stderr_tail(&output.stderr)
+            ),
+        ));
+    }
+    std::fs::write(dump_path, &output.stdout).map_err(|e| {
+        VaultlineError::with_source(
+            ErrorKind::Io,
+            format!("cannot write the dump file {}", dump_path.display()),
+            e,
+        )
+    })
 }
 
 /// MySQL/MariaDB: `mysqldump` with the transactional consistency flags;
@@ -543,11 +546,10 @@ mod tests {
     fn pgpass_line_has_the_documented_shape() {
         let info =
             parse_conninfo("postgresql://user:secret@db.example.com:5433/app").expect("parse");
-        let auth = PgAuth::write_passfile(&info, "secret").expect("passfile");
-        let PgAuth::PassFile { env, .. } = auth else {
-            panic!("test sets a password, so a passfile must be written");
-        };
-        let contents = std::fs::read_to_string(&env).expect("read");
+        let auth = PgPassfile::for_conninfo(&info)
+            .expect("passfile")
+            .expect("password present");
+        let contents = std::fs::read_to_string(auth.path()).expect("read");
         assert_eq!(contents, "db.example.com:5433:app:user:secret\n");
     }
 }

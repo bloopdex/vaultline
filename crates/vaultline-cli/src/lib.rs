@@ -8,6 +8,7 @@ pub mod database;
 pub mod engine;
 pub mod logging;
 pub mod metrics;
+pub mod restore;
 pub mod template;
 
 pub use vaultline_core::error::{ErrorKind, VaultlineError};
@@ -34,6 +35,9 @@ fn dispatch(cli: cli::Cli) -> Result<(), VaultlineError> {
         cli::Command::Backup(args) => match args.command {
             cli::BackupCommand::Run(args) => backup::run_backup(args),
             cli::BackupCommand::List(args) => backup::run_list(args),
+            cli::BackupCommand::Verify(args) => restore::run_verify(args),
+            cli::BackupCommand::Inspect(args) => restore::run_inspect(args),
         },
+        cli::Command::Restore(args) => restore::run_restore(args),
     }
 }

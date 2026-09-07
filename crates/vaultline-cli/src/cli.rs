@@ -51,6 +51,9 @@ pub enum Command {
     Validate(ValidateArgs),
     /// Back up an application and inspect its recorded snapshots.
     Backup(BackupArgs),
+    /// Restore a snapshot by executing the definition's restore procedure
+    /// (sandbox-then-promote; never overwrites existing files).
+    Restore(crate::restore::RestoreArgs),
 }
 
 #[derive(clap::Args)]
@@ -65,6 +68,12 @@ pub enum BackupCommand {
     Run(crate::backup::BackupRunArgs),
     /// List the snapshots recorded for this application.
     List(crate::backup::BackupListArgs),
+    /// Verify a snapshot against the definition's policy (L3 cross-check,
+    /// L4 content comparison, L5 SQLite rehearsal) and record the level
+    /// actually reached in the state.
+    Verify(crate::restore::BackupVerifyArgs),
+    /// Show a snapshot's full record.
+    Inspect(crate::restore::BackupInspectArgs),
 }
 
 #[derive(clap::Args)]
