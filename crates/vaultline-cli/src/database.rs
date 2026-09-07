@@ -415,7 +415,13 @@ fn capture_mysql(name: &str, conn: &ConnInfo, dump_path: &Path) -> Result<()> {
         command.env("MYSQL_PWD", password);
     }
     if let Some(dbname) = &conn.dbname {
-        command.arg("--databases").arg(dbname);
+        // The dbname is positional, deliberately NOT `--databases`:
+        // `--databases` embeds CREATE DATABASE / USE statements in the
+        // dump, which would override the declared restore target (a dump
+        // restored into a renamed database would recreate and load the
+        // ORIGINAL name). Found by the MySQL restore round trip
+        // (2026-09-07), before any user hit it.
+        command.arg(dbname);
     }
     info!(database = name, tool = %mysqldump.display(), "running mysqldump");
     let output = command.output().map_err(|e| {

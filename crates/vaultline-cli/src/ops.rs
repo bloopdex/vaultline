@@ -119,9 +119,28 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
         }
     };
 
-    // restic.
+    // restic (its version flag is a subcommand, not --version).
     match Restic::locate() {
-        Ok(restic) => match probe_version(restic.bin_path()) {
+        Ok(restic) => match Command::new(restic.bin_path())
+            .arg("version")
+            .output()
+            .map_err(|e| format!("cannot start {}: {e}", restic.bin_path().display()))
+            .and_then(|output| {
+                if output.status.success() {
+                    Ok(String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .next()
+                        .unwrap_or("(no version output)")
+                        .trim()
+                        .to_string())
+                } else {
+                    Err(format!(
+                        "{} failed to run (exit {:?})",
+                        restic.bin_path().display(),
+                        output.status.code()
+                    ))
+                }
+            }) {
             Ok(version) => checks.push(Check {
                 name: "restic".to_string(),
                 status: CheckStatus::Ok,
@@ -229,6 +248,14 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
                                 snapshots.len()
                             ),
                         }),
+                        Err(e) if e.to_string().contains("repository does not exist") => {
+                            checks.push(Check {
+                                name: "storage".to_string(),
+                                status: CheckStatus::Warning,
+                                detail: "repository not created yet — the first backup run initializes it"
+                                    .to_string(),
+                            });
+                        }
                         Err(e) => checks.push(Check {
                             name: "storage".to_string(),
                             status: CheckStatus::Error,
@@ -301,7 +328,9 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
             format!("doctor found {errored} failing check(s) ({warned} warning(s))"),
         ));
     }
-    println!("healthy: all checks passed ({warned} warning(s))");
+    if !args.json {
+        println!("healthy: all checks passed ({warned} warning(s))");
+    }
     Ok(())
 }
 

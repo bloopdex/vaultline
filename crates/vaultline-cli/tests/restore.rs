@@ -558,6 +558,161 @@ restore_database = {{ database = "main", target_database = "test2" }}
     assert!(out.trim() == "3", "restored row count: {out}");
 }
 
+/// MySQL round trip (container-gated): dump → mysql client restore into a
+/// second database → the restored rows are queryable. The first MySQL
+/// pressure — it also pinned the `--databases` capture bug (recorded in
+/// database.rs): a dump carrying CREATE DATABASE/USE would override the
+/// declared restore target.
+#[test]
+fn mysql_restore_round_trip() {
+    if restic_bin().is_none() || docker_available().is_none() {
+        eprintln!("skipping: restic or Docker not available (container-gated)");
+        return;
+    }
+    use testcontainers::runners::SyncRunner as _;
+
+    let fixture = Fixture::new();
+    let base = format!(
+        r#"
+[application]
+name = "thornwa"
+[[application.sources.files]]
+name = "uploads"
+paths = ["{uploads}"]
+[application.storage]
+kind = "local"
+path = "{repo_parent}"
+password_env = "VAULTLINE_TEST_PASSWORD"
+[application.retention]
+keep_last = 14
+[application.verification]
+level = 2
+[[application.restore.steps]]
+restore_files = {{ source = "uploads", target = "{restore_target}/uploads" }}
+[[application.restore.steps]]
+restore_database = {{ database = "main", target_database = "test2" }}
+"#,
+        uploads = toml_path(&fixture.uploads),
+        repo_parent = toml_path(fixture.repo.parent().expect("repo parent")),
+        restore_target = toml_path(&fixture.restore_target),
+    );
+
+    let mysql = testcontainers_modules::mysql::Mysql::default();
+    let node = mysql.start().expect("start mysql");
+    let port = node.get_host_port_ipv4(3306).expect("mapped port");
+
+    let exec = |args: &[&str]| -> std::process::Output {
+        Command::new("docker")
+            .arg("exec")
+            .arg(node.id())
+            .args(args)
+            .output()
+            .expect("docker exec runs")
+    };
+
+    // The module's root has no password and a default database `test`.
+    let seed = exec(&[
+        "mysql",
+        "-uroot",
+        "test",
+        "-e",
+        "CREATE TABLE t(x INT); INSERT INTO t VALUES (1),(2),(3);",
+    ]);
+    assert!(
+        seed.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+
+    let create_db = exec(&["mysql", "-uroot", "-e", "CREATE DATABASE test2;"]);
+    assert!(
+        create_db.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&create_db.stderr)
+    );
+
+    let db_url = if cfg!(windows) {
+        format!("mysql://root@host.docker.internal:{port}/test")
+    } else {
+        format!("mysql://root@localhost:{port}/test")
+    };
+    let contents = format!(
+        "{base}\n[[application.databases]]\nname = \"main\"\nkind = \"mysql\"\nurl_env = \"TEST_DATABASE_URL\"\nconsistency = {{ logical = {{ format = \"sql\" }} }}\n",
+    );
+    std::fs::write(&fixture.config, contents).expect("config");
+
+    // On Windows there is no host mysqldump/mysql client; the shims run the
+    // real tools inside the mysql image, reaching the host-mapped port
+    // through host.docker.internal (MYSQL_PWD forwards the password env;
+    // the module's root has none).
+    let shim = |name: &str, tool: &str| -> PathBuf {
+        let path = fixture._dir.path().join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "@echo off\r\ndocker run --rm -i -e MYSQL_PWD=%MYSQL_PWD% mysql:8.1 {tool} %*\r\n"
+            ),
+        )
+        .expect("shim");
+        path
+    };
+
+    let mut backup_cmd = vaultline();
+    backup_cmd
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .env("TEST_DATABASE_URL", &db_url);
+    if cfg!(windows) {
+        backup_cmd.env("VAULTLINE_MYSQLDUMP", shim("mysqldump.cmd", "mysqldump"));
+    }
+    backup_cmd.assert().success();
+
+    let mut restore_cmd = vaultline();
+    restore_cmd
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(&fixture.restore_target)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .env("TEST_DATABASE_URL", &db_url);
+    if cfg!(windows) {
+        restore_cmd.env("VAULTLINE_MYSQL", shim("mysql.cmd", "mysql"));
+    }
+    restore_cmd
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("restore complete"));
+
+    // The restored rows are queryable in test2 — and the SOURCE table is
+    // untouched (the dump must not have recreated the source database).
+    let count = exec(&[
+        "mysql",
+        "-uroot",
+        "-N",
+        "test2",
+        "-e",
+        "SELECT COUNT(*) FROM t;",
+    ]);
+    let out = String::from_utf8_lossy(&count.stdout);
+    assert!(count.status.success(), "{out}");
+    assert!(out.trim() == "3", "restored row count: {out}");
+
+    let source_still = exec(&[
+        "mysql",
+        "-uroot",
+        "-N",
+        "test",
+        "-e",
+        "SELECT COUNT(*) FROM t;",
+    ]);
+    let out = String::from_utf8_lossy(&source_still.stdout);
+    assert!(source_still.status.success(), "{out}");
+    assert!(out.trim() == "3", "source rows untouched: {out}");
+}
+
 /// Unit-level contract tests live with the module; here the snapshot
 /// selector contract is exercised end-to-end: unique prefixes work and
 /// ambiguous ones fail.

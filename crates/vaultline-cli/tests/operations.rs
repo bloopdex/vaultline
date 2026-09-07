@@ -169,8 +169,9 @@ fn prune_json_payload_carries_decisions() {
     let fixture = Fixture::new();
     fixture.backup();
 
-    cmd.args(["backup", "prune", "--config", "--json"])
-        .arg(&fixture.config);
+    cmd.args(["backup", "prune", "--config"])
+        .arg(&fixture.config)
+        .arg("--json");
     fixture.envs(&mut cmd);
     let out = cmd.output().expect("runs");
     assert!(out.status.success());
@@ -201,16 +202,17 @@ fn prune_apply_forgets_records_and_is_idempotent() {
     }
     assert_eq!(fixture.engine_snapshot_count(), 3);
 
-    cmd.args(["backup", "prune", "--config", "--apply"])
-        .arg(&fixture.config);
+    cmd.args(["backup", "prune", "--config"])
+        .arg(&fixture.config)
+        .arg("--apply");
     fixture.envs(&mut cmd);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("prune applied"))
-        .stdout(predicate::str::contains("2 snapshot(s) forgotten, 2 kept"));
+        .stdout(predicate::str::contains("1 snapshot(s) forgotten, 2 kept"));
 
-    // keep_last 2: one engine snapshot remains.
-    assert_eq!(fixture.engine_snapshot_count(), 1);
+    // keep_last 2 over three snapshots: two engine snapshots remain.
+    assert_eq!(fixture.engine_snapshot_count(), 2);
 
     let state_path = fixture.state_dir().join("state.json");
     let state: serde_json::Value =
@@ -219,7 +221,7 @@ fn prune_apply_forgets_records_and_is_idempotent() {
         .as_array()
         .expect("prunes array");
     assert_eq!(prunes.len(), 1, "one applied prune recorded");
-    assert_eq!(prunes[0]["forgotten"].as_array().expect("ids").len(), 2);
+    assert_eq!(prunes[0]["forgotten"].as_array().expect("ids").len(), 1);
     assert_eq!(prunes[0]["kept"], 2);
     assert!(
         state["applications"]["thornwa"]["operations"]["last_prune_at"]
@@ -232,12 +234,13 @@ fn prune_apply_forgets_records_and_is_idempotent() {
     let mut again = vaultline();
     fixture.envs(&mut again);
     again
-        .args(["backup", "prune", "--config", "--apply"])
+        .args(["backup", "prune", "--config"])
         .arg(&fixture.config)
+        .arg("--apply")
         .assert()
         .success()
         .stdout(predicate::str::contains("0 snapshot(s) forgotten, 2 kept"));
-    assert_eq!(fixture.engine_snapshot_count(), 1);
+    assert_eq!(fixture.engine_snapshot_count(), 2);
     let state: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("json");
     assert_eq!(
@@ -318,8 +321,10 @@ fn doctor_reports_health_and_failures() {
         return;
     };
     let fixture = Fixture::new();
+    fixture.backup();
 
-    // Healthy: config ok, restic ok, state ok, storage ok (password set).
+    // Healthy: config ok, restic ok, state ok, storage ok (password set,
+    // the repository exists after the backup).
     cmd.args(["doctor", "--config"]).arg(&fixture.config);
     fixture.envs(&mut cmd);
     cmd.assert()
@@ -355,8 +360,9 @@ fn doctor_json_payload_is_structured() {
     let fixture = Fixture::new();
     fixture.backup();
 
-    cmd.args(["doctor", "--config", "--json"])
-        .arg(&fixture.config);
+    cmd.args(["doctor", "--config"])
+        .arg(&fixture.config)
+        .arg("--json");
     fixture.envs(&mut cmd);
     let out = cmd.output().expect("runs");
     assert!(out.status.success());
@@ -400,8 +406,9 @@ fn status_summarizes_the_application() {
     let mut json_cmd = vaultline();
     fixture.envs(&mut json_cmd);
     json_cmd
-        .args(["status", "--config", "--json"])
+        .args(["status", "--config"])
         .arg(&fixture.config)
+        .arg("--json")
         .assert()
         .success();
     let payload: serde_json::Value =
@@ -447,8 +454,10 @@ fn timer_generate_writes_unit_files() {
         verify_service.contains("backup verify latest"),
         "{verify_service}"
     );
+    // "0 3 * * 1" is Sunday in the crate's day-of-week range (1..=7,
+    // Sunday=1) — the translation carries that.
     assert!(
-        verify_timer.contains("OnCalendar=Mon *-*-* 3:0:00"),
+        verify_timer.contains("OnCalendar=Sun *-*-* 3:0:00"),
         "{verify_timer}"
     );
 

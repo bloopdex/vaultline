@@ -44,7 +44,9 @@ fn dispatch(cli: cli::Cli) -> Result<(), VaultlineError> {
             cli::BackupCommand::Prune(args) => prune::run_prune(args),
         },
         cli::Command::Restore(args) => restore::run_restore(args),
-        cli::Command::Schedule(args) => schedule::run_schedule(args),
+        cli::Command::Schedule(args) => match args.command {
+            schedule::ScheduleCommand::Run(args) => schedule::run_schedule(args),
+        },
         cli::Command::Doctor(args) => ops::run_doctor(args),
         cli::Command::Status(args) => ops::run_status(args),
         cli::Command::Timer(args) => timer::run_timer(args),

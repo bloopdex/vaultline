@@ -549,6 +549,87 @@ capture = "direct"
     );
 }
 
+/// A named Docker volume with direct semantics is captured through its
+/// resolved mountpoint (Unix only: on Windows/macOS Desktop the mountpoint
+/// lives inside the Docker VM, not on the host — recorded in
+/// docs/limitations.md; the hosted ubuntu CI job runs this proof).
+#[cfg(unix)]
+#[test]
+fn named_docker_volume_direct_capture() {
+    if restic_bin().is_none() || docker_available().is_none() {
+        eprintln!("skipping: restic or Docker not available (container-gated)");
+        return;
+    }
+    let fixture = Fixture::new();
+    let volume_name = format!("vaultline-test-{}", std::process::id());
+
+    let create = Command::new("docker")
+        .args(["volume", "create", &volume_name])
+        .output()
+        .expect("docker volume create");
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    // Write data INTO the volume through a throwaway container.
+    let write = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{volume_name}:/data"),
+            "alpine",
+            "sh",
+            "-c",
+            "echo volume-payload > /data/vol.txt",
+        ])
+        .output()
+        .expect("docker run");
+    assert!(
+        write.status.success(),
+        "{}",
+        String::from_utf8_lossy(&write.stderr)
+    );
+
+    append_database(
+        &fixture.config,
+        &format!(
+            r#"
+[[application.volumes]]
+name = "{volume_name}"
+capture = "direct"
+"#
+        ),
+    );
+
+    vaultline()
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success();
+
+    // The volume's content entered the repository through the resolved
+    // mountpoint (/var/lib/docker/volumes/<name>/_data on the host).
+    let ls = restic(&fixture.repo, &["ls", "latest"]);
+    let listing = String::from_utf8_lossy(&ls.stdout);
+    assert!(listing.contains("vol.txt"), "{listing}");
+    assert!(listing.contains(volume_name.as_str()), "{listing}");
+
+    let rm = Command::new("docker")
+        .args(["volume", "rm", &volume_name])
+        .output()
+        .expect("docker volume rm");
+    assert!(
+        rm.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rm.stderr)
+    );
+}
+
 /// A sidecar/pause-first volume stays declared-but-not-captured — the
 /// honesty contract — while the rest of the backup proceeds.
 #[test]

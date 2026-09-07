@@ -56,7 +56,7 @@ pub enum Command {
     Restore(crate::restore::RestoreArgs),
     /// Run whatever the definition's schedules make due (backup and/or
     /// verification) and explain what ran and why.
-    Schedule(crate::schedule::ScheduleRunArgs),
+    Schedule(crate::schedule::ScheduleArgs),
     /// Check the environment: configuration, tools, state, storage.
     Doctor(crate::ops::DoctorArgs),
     /// Summarize one application's records against its definition.

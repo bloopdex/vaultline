@@ -92,9 +92,16 @@ pub fn run_prune(args: BackupPruneArgs) -> Result<()> {
     metrics::emit_u64("prune_snapshots_forgotten", forget_count as u64);
 
     if !args.apply {
-        println!(
+        // stdout is the machine channel in --json mode — the dry-run note
+        // goes to stderr there, never into the payload.
+        let note = format!(
             "dry run — nothing changed. Re-run with --apply to forget {forget_count} snapshot(s) and reclaim repository space."
         );
+        if args.json {
+            eprintln!("{note}");
+        } else {
+            println!("{note}");
+        }
         return Ok(());
     }
 

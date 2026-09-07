@@ -29,6 +29,19 @@ use crate::backup::state_dir;
 use crate::metrics;
 
 #[derive(clap::Args)]
+pub struct ScheduleArgs {
+    #[command(subcommand)]
+    pub command: ScheduleCommand,
+}
+
+#[derive(clap::Subcommand)]
+pub enum ScheduleCommand {
+    /// Compute what the schedules make due, run it, and explain what ran
+    /// and why.
+    Run(ScheduleRunArgs),
+}
+
+#[derive(clap::Args)]
 pub struct ScheduleRunArgs {
     #[arg(long, default_value = "vaultline.toml")]
     pub config: PathBuf,
@@ -149,6 +162,7 @@ pub fn run_schedule(args: ScheduleRunArgs) -> Result<()> {
         return Ok(());
     }
 
+    let backup_ran = backup_due;
     if backup_due {
         println!(
             "backup due (schedule \"{}\", last ran {}) — running",
@@ -164,6 +178,8 @@ pub fn run_schedule(args: ScheduleRunArgs) -> Result<()> {
         metrics::emit_u64("schedule_backups_due_run", 1);
     }
 
+    let verify_due = verify_due
+        || (backup_ran && due_for(app.verification.schedule.as_deref(), last_verify, now)?);
     if verify_due {
         // Record the attempt first — a failing verification must not
         // hot-loop on every invocation until the next occurrence.

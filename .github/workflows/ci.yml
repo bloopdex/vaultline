@@ -41,11 +41,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The integration tests need real binaries: restic (engine), sqlite3
       # (SQLite capture), pg_dump (PostgreSQL capture; the container itself
-      # comes from testcontainers on the runner's Docker). On Windows the
-      # tests skip gracefully when a tool is absent (docs/testing.md).
+      # comes from testcontainers on the runner's Docker), the mysql client
+      # tools (MySQL round trip), and the OpenSSH client (the SFTP proof's
+      # agent). On Windows the tests skip gracefully when a tool is absent
+      # (docs/testing.md).
       - name: Install test tools (ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y restic sqlite3 postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y restic sqlite3 postgresql-client mysql-client openssh-client
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (warnings denied)
