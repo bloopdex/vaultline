@@ -15,9 +15,11 @@ use tracing::{info, warn};
 use vaultline_core::config;
 use vaultline_core::error::{ErrorKind, Result, VaultlineError};
 use vaultline_core::retention::{RetentionAction, plan};
-use vaultline_core::state::{PruneRecord, State, StateLock};
+use vaultline_core::state::{PruneRecord, State};
 
-use crate::backup::{repo_url, resolve_password, state_dir, storage_envs};
+use crate::backup::{
+    repo_url, resolve_password, restic_sftp_opts, state_dir, state_lock, storage_envs,
+};
 use crate::engine::Restic;
 use crate::metrics;
 
@@ -39,7 +41,7 @@ pub struct BackupPruneArgs {
 pub fn run_prune(args: BackupPruneArgs) -> Result<()> {
     let app = config::load(&args.config)?;
     let state_dir = state_dir()?;
-    let _lock = StateLock::acquire_with(&state_dir, &crate::backup::process_is_alive)?;
+    let _lock = state_lock(&state_dir)?;
     let state_path = state_dir.join("state.json");
     let state = State::load(&state_path)?;
     let snapshots = state
@@ -111,7 +113,8 @@ pub fn run_prune(args: BackupPruneArgs) -> Result<()> {
     let password = resolve_password(&app)?;
     let repo = repo_url(&app)?;
     let extra_envs = storage_envs(&app)?;
-    let engine_snapshots = restic.list_snapshots(&repo, &password, &extra_envs)?;
+    let sftp_opts = restic_sftp_opts(&app).unwrap_or_default();
+    let engine_snapshots = restic.list_snapshots(&repo, &password, &extra_envs, &sftp_opts)?;
     let engine_has = |full_id: &str| {
         engine_snapshots.iter().any(|line| {
             line.get("id")
@@ -149,8 +152,8 @@ pub fn run_prune(args: BackupPruneArgs) -> Result<()> {
     }
 
     if !engine_ids.is_empty() {
-        restic.forget(&engine_ids, &repo, &password, &extra_envs)?;
-        restic.prune(&repo, &password, &extra_envs)?;
+        restic.forget(&engine_ids, &repo, &password, &extra_envs, &sftp_opts)?;
+        restic.prune(&repo, &password, &extra_envs, &sftp_opts)?;
     }
 
     // Hygiene (ADR-007, the Phase 7 candidate): a forgotten snapshot's

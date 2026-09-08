@@ -51,6 +51,16 @@ jobs:
       - name: Install test tools (ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y restic sqlite3 postgresql-client mysql-client openssh-client
+      # The named-volume direct-capture proof needs the runner user to
+      # traverse the docker-data directory (the daemon answers on its
+      # socket; the filesystem is root-only by default — the first
+      # hosted run recorded the skip). The grant makes the proof
+      # EXECUTE here; the proof's reachability gate still skips
+      # honestly wherever traversal genuinely cannot work (Docker
+      # Desktop VMs).
+      - name: Grant docker-data traversal (named-volume proof)
+        if: runner.os == 'Linux'
+        run: sudo chmod o+rx /var/lib/docker /var/lib/docker/volumes || true
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy (warnings denied)

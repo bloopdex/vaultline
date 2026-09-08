@@ -689,6 +689,7 @@ fn sidecar_capture_copies_the_volume_into_the_snapshot() {
 [[application.volumes]]
 name = "{volume}"
 capture = "sidecar"
+image = "alpine"
 [[application.restore.steps]]
 restore_volume = {{ volume = "{volume}" }}
 "#,

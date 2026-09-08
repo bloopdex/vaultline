@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 
 use vaultline_core::config;
 use vaultline_core::error::{ErrorKind, Result, VaultlineError};
-use vaultline_core::state::{State, StateLock};
+use vaultline_core::state::State;
 
 use crate::backup::state_dir;
 use crate::metrics;
@@ -184,7 +184,7 @@ pub fn run_schedule(args: ScheduleRunArgs) -> Result<()> {
         // Record the attempt first — a failing verification must not
         // hot-loop on every invocation until the next occurrence.
         {
-            let _lock = StateLock::acquire_with(&state_dir, &crate::backup::process_is_alive)?;
+            let _lock = crate::backup::state_lock(&state_dir)?;
             let mut state = State::load(&state_path)?;
             state
                 .applications

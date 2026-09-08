@@ -34,7 +34,7 @@ use vaultline_core::model::{
 };
 use vaultline_core::state::State;
 
-use crate::backup::{repo_url, resolve_password, storage_envs};
+use crate::backup::{repo_url, resolve_password, restic_sftp_opts, storage_envs};
 use crate::engine::Restic;
 use crate::metrics;
 
@@ -515,14 +515,12 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
         return Ok(());
     }
 
-    let _lock = vaultline_core::state::StateLock::acquire_with(
-        &crate::backup::state_dir()?,
-        &crate::backup::process_is_alive,
-    )?;
+    let _lock = crate::backup::state_lock(&crate::backup::state_dir()?)?;
     let restic = Restic::locate()?;
     let password = resolve_password(&app)?;
     let repo = repo_url(&app)?;
     let extra_envs = storage_envs(&app)?;
+    let sftp_opts = restic_sftp_opts(&app).unwrap_or_default();
 
     let started = Instant::now();
     let stage_root = args.target.join(".vaultline").join(&snapshot.id);
@@ -558,6 +556,7 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
         &repo,
         &password,
         &extra_envs,
+        &sftp_opts,
         &restored_root,
     )?;
     if !restore_output.status.success() {
@@ -869,6 +868,7 @@ fn run_rehearsal(
     repo: &str,
     password: &str,
     extra_envs: &[(String, String)],
+    opts: &[String],
 ) -> Result<Vec<String>> {
     let root = app.rehearsal.as_ref().ok_or_else(|| {
         VaultlineError::new(
@@ -919,6 +919,7 @@ fn run_rehearsal(
         repo,
         password,
         extra_envs,
+        opts,
         &restored_root,
     )?;
     // The remap root is THIS snapshot's rehearsal directory — staging and
@@ -960,6 +961,7 @@ fn restic_restore(
     repo: &str,
     password: &str,
     extra_envs: &[(String, String)],
+    opts: &[String],
     target: &Path,
 ) -> Result<std::process::Output> {
     restic.run(
@@ -968,6 +970,7 @@ fn restic_restore(
         repo,
         password,
         extra_envs,
+        opts,
     )
 }
 
@@ -1328,10 +1331,7 @@ pub fn run_verify(args: BackupVerifyArgs) -> Result<()> {
     let app = config::load(&args.config)?;
     let state_dir = crate::backup::state_dir()?;
     let state_path = state_dir.join("state.json");
-    let _lock = vaultline_core::state::StateLock::acquire_with(
-        &state_dir,
-        &crate::backup::process_is_alive,
-    )?;
+    let _lock = crate::backup::state_lock(&state_dir)?;
     let mut state = State::load(&state_path)?;
     let snapshot = select_snapshot(&state, &app.name, &args.snapshot)?.clone();
 
@@ -1339,9 +1339,10 @@ pub fn run_verify(args: BackupVerifyArgs) -> Result<()> {
     let password = resolve_password(&app)?;
     let repo = repo_url(&app)?;
     let extra_envs = storage_envs(&app)?;
+    let sftp_opts = restic_sftp_opts(&app).unwrap_or_default();
 
     // L3: the engine still has the snapshot we recorded.
-    let engine_snapshots = restic.list_snapshots(&repo, &password, &extra_envs)?;
+    let engine_snapshots = restic.list_snapshots(&repo, &password, &extra_envs, &sftp_opts)?;
     // restic's `snapshots --json` lists SHORT ids (8 chars); the state
     // records the full 64-char id — match by the full id's prefix.
     let engine_has_snapshot = engine_snapshots.iter().any(|line| {
@@ -1382,6 +1383,7 @@ pub fn run_verify(args: BackupVerifyArgs) -> Result<()> {
             &repo,
             &password,
             &extra_envs,
+            &sftp_opts,
             scratch.path(),
         )?;
         if !output.status.success() {
@@ -1453,6 +1455,7 @@ pub fn run_verify(args: BackupVerifyArgs) -> Result<()> {
                         &repo,
                         &password,
                         &extra_envs,
+                        &sftp_opts,
                         scratch.path(),
                     )?;
                     let _ = output;
@@ -1513,6 +1516,7 @@ pub fn run_verify(args: BackupVerifyArgs) -> Result<()> {
             &repo,
             &password,
             &extra_envs,
+            &sftp_opts,
         )?);
         reached = vaultline_core::model::VerificationLevel::L6;
         record_reached(&mut state, &state_path, &app.name, &snapshot.id, reached);

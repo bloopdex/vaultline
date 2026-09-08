@@ -1,7 +1,8 @@
 # Local release bundle (Windows): builds the release binary, checksums
 # it, and smoke-tests the artifact. The tag-driven CI workflow
 # (.github/workflows/release.yml) performs the same assembly on both
-# platforms and publishes the release once the repository is hosted.
+# platforms and publishes the release at
+# github.com/bloopdex/vaultline (v0.8.0 published 2026-09-07).
 #
 # Usage:
 #   powershell -File scripts/release.ps1

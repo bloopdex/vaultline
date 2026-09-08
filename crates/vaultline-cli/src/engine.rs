@@ -95,9 +95,10 @@ impl Restic {
         repo: &str,
         password: &str,
         extra_envs: &[(String, String)],
+        opts: &[String],
     ) -> Result<()> {
         let output = self
-            .command(password, extra_envs)
+            .command(password, extra_envs, opts)
             .arg("-r")
             .arg(repo)
             .arg("init")
@@ -131,8 +132,9 @@ impl Restic {
         repo: &str,
         password: &str,
         extra_envs: &[(String, String)],
+        opts: &[String],
     ) -> Result<std::process::Output> {
-        let mut command = self.command(password, extra_envs);
+        let mut command = self.command(password, extra_envs, opts);
         command.arg("-r").arg(repo);
         command.args(fixed);
         command.args(values);
@@ -146,9 +148,10 @@ impl Restic {
         repo: &str,
         password: &str,
         extra_envs: &[(String, String)],
+        opts: &[String],
     ) -> Result<Vec<Value>> {
         let output = self
-            .command(password, extra_envs)
+            .command(password, extra_envs, opts)
             .arg("-r")
             .arg(repo)
             .args(["--json", "snapshots"])
@@ -175,8 +178,9 @@ impl Restic {
         paths: &[&Path],
         excludes: &[String],
         extra_envs: &[(String, String)],
+        opts: &[String],
     ) -> Result<BackupSummary> {
-        let mut command = self.command(password, extra_envs);
+        let mut command = self.command(password, extra_envs, opts);
         command.arg("-r").arg(repo).args(["--json", "backup"]);
         for exclude in excludes {
             command.arg("--exclude").arg(exclude);
@@ -195,24 +199,37 @@ impl Restic {
         repo: &str,
         password: &str,
         extra_envs: &[(String, String)],
+        opts: &[String],
     ) -> Result<()> {
-        let output = self.run(&["forget"], ids, repo, password, extra_envs)?;
+        let output = self.run(&["forget"], ids, repo, password, extra_envs, opts)?;
         self.ensure_success(&output, password)
     }
 
     /// Reclaim repository space from forgotten snapshots. The engine's own
     /// defaults govern repack aggressiveness (max-unused/max-repack) — the
     /// engine is the authority on its repository internals.
-    pub fn prune(&self, repo: &str, password: &str, extra_envs: &[(String, String)]) -> Result<()> {
-        let output = self.run(&["prune"], &[], repo, password, extra_envs)?;
+    pub fn prune(
+        &self,
+        repo: &str,
+        password: &str,
+        extra_envs: &[(String, String)],
+        opts: &[String],
+    ) -> Result<()> {
+        let output = self.run(&["prune"], &[], repo, password, extra_envs, opts)?;
         self.ensure_success(&output, password)
     }
 
     /// Verify repository integrity (the quick structural check — the
     /// verification-level L2 gate; `--read-data` sampling is a later level).
-    pub fn check(&self, repo: &str, password: &str, extra_envs: &[(String, String)]) -> Result<()> {
+    pub fn check(
+        &self,
+        repo: &str,
+        password: &str,
+        extra_envs: &[(String, String)],
+        opts: &[String],
+    ) -> Result<()> {
         let output = self
-            .command(password, extra_envs)
+            .command(password, extra_envs, opts)
             .arg("-r")
             .arg(repo)
             .arg("check")
@@ -221,13 +238,15 @@ impl Restic {
         self.ensure_success(&output, password)
     }
 
-    fn command(&self, password: &str, extra_envs: &[(String, String)]) -> Command {
+    fn command(&self, password: &str, extra_envs: &[(String, String)], opts: &[String]) -> Command {
         let mut command = Command::new(&self.bin);
         // The password is an environment variable for restic, not argv.
         command.env("RESTIC_PASSWORD", password);
         for (key, value) in extra_envs {
             command.env(key, value);
         }
+        // Global options (the sftp key/known-hosts wiring) — argv only.
+        command.args(opts);
         command
     }
 

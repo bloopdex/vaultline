@@ -1,0 +1,48 @@
+Fix round: close the six recorded product problems (toward v0.9.0)
+
+1. SFTP key_file/known_hosts are WIRED (ADR-002 amendment part 3):
+   restic's sftp.args option (present since 0.16.1, so apt's 0.16.4
+   included) extends the native ssh argv — verified against restic's
+   own source that the backend execs ssh via exec.Command and
+   tokenizes the option string without any shell. The product builds
+   `-o sftp.args="-o BatchMode=yes -i '<key>' -o
+   UserKnownHostsFile='<hosts>'"` (single-quoted paths; validation
+   rejects quote/newline characters, which the tokenizer cannot
+   represent). The opts thread through every engine invocation
+   (backup, init, snapshots, forget, prune, check, restore, the L4/L5
+   scratch restores, the L6 rehearsal, doctor's probe). The declared
+   files are stat-checked with a named error.
+
+2. The SFTP end-to-end proof is AGENT-FREE: it declares key_file +
+   known_hosts through the product and owns a temporary known_hosts
+   file (the user's real ~/.ssh/known_hosts is never mutated). The
+   proof now runs locally on Windows (the disabled OpenSSH agent
+   service is irrelevant) and hosted; the raw-restic verification
+   step passes the same -o sftp.args.
+
+3. The sidecar capture honors a user-declared image (volume `image`
+   field, sidecar-only like the container rule; defaults to alpine).
+   The docker argv is factored into a pure, unit-tested function.
+
+4. Lock start-time verification (ADR-007 revisit condition): the lock
+   records the holder's process start time (Linux /proc/<pid>/stat;
+   Windows PowerShell StartTime; other unix degrades to liveness,
+   honestly). On contention a live pid whose start time differs from
+   the record is a REUSED pid — reclaimed. Pid-only locks from
+   earlier builds fall back to liveness alone.
+
+5. The named-volume direct-capture proof executes on the hosted
+   runner: CI grants docker-data traversal (sudo chmod o+rx
+   /var/lib/docker /var/lib/docker/volumes, non-fatal); the proof's
+   reachability gate still skips honestly where traversal cannot
+   work.
+
+6. Stale text cleanup: the module headers and comments promising
+   "later phases" that have arrived, cli.md's dead
+   declared-but-not-captured paragraph, the hosting-era workflow
+   comments.
+
+Tests: 183 passing (11 new: 2 config validation, 4 lock core, 5
+CLI sftp/sidecar builders, 1 pid-reuse integration) — all gates
+green locally (fmt/clippy -D warnings/test/vet/deny/workflow
+validator/bench check).

@@ -18,7 +18,7 @@ use vaultline_core::model::DatabaseType;
 use vaultline_core::retention::plan;
 use vaultline_core::state::State;
 
-use crate::backup::{repo_url, resolve_password, state_dir, storage_envs};
+use crate::backup::{repo_url, resolve_password, restic_sftp_opts, state_dir, storage_envs};
 use crate::database::locate_tool;
 use crate::engine::Restic;
 
@@ -239,7 +239,8 @@ pub fn run_doctor(args: DoctorArgs) -> Result<()> {
                 Ok(restic) => {
                     let repo = repo_url(app)?;
                     let extra_envs = storage_envs(app)?;
-                    match restic.list_snapshots(&repo, &password, &extra_envs) {
+                    let sftp_opts = restic_sftp_opts(app).unwrap_or_default();
+                    match restic.list_snapshots(&repo, &password, &extra_envs, &sftp_opts) {
                         Ok(snapshots) => checks.push(Check {
                             name: "storage".to_string(),
                             status: CheckStatus::Ok,

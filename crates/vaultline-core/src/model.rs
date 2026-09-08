@@ -73,7 +73,7 @@ pub struct FileSource {
     #[serde(default)]
     pub excludes: Vec<String>,
     /// Optional pre-capture quiesce rule (shell-free argv — see the security
-    /// model; executed by later phases).
+    /// model).
     #[serde(default)]
     pub quiesce: Option<Quiesce>,
 }
@@ -178,10 +178,16 @@ pub struct Volume {
     /// semantics only — validation rejects it with any other capture).
     #[serde(default)]
     pub container: Option<String>,
+    /// The sidecar image to copy the volume out with (sidecar semantics
+    /// only — validation rejects it with any other capture). Defaults to
+    /// `alpine` when the definition names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidecar_image: Option<String>,
 }
 
-/// How a volume's bytes are captured. The decision between these is an
-/// experiment recorded for later phases (ADR-V0-3 walkthrough).
+/// How a volume's bytes are captured (ADR-V0-3): direct through the
+/// resolved mountpoint, through a read-only sidecar container, or after
+/// pausing the declared writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CaptureSemantics {
@@ -364,8 +370,7 @@ pub enum RestoreStep {
 }
 
 /// A completed backup: the recorded outcome of one run against one
-/// application (ADR-V0-3). Produced by later phases; the type and its
-/// serialization are pinned here so manifests are stable from day one.
+/// application (ADR-V0-3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BackupSnapshot {
     /// Vaultline's own snapshot id (opaque, stable).
@@ -480,6 +485,7 @@ mod tests {
                 name: "thornwa_pgdata".to_string(),
                 capture: CaptureSemantics::Direct,
                 container: None,
+                sidecar_image: None,
             }],
             storage: StorageTarget {
                 kind: StorageKind::Local {

@@ -82,15 +82,16 @@ reference, verification level actually reached, what it can reconstruct)
 is recorded in the state file and reported on stdout (`--json` for the
 machine payload).
 
-Sources declared but not captured yet (databases, volumes) are warned on
-stderr and recorded in the snapshot's configuration metadata — a snapshot
-never claims coverage it does not have.
+Every declared source, database, and volume executes — the snapshot's
+manifest records each capture path, and the run aborts (never silently
+skips) when a declared source has vanished (ADR-007).
 
 The state directory is `VAULTLINE_STATE_DIR`, else the platform data
 directory (`~/.local/state/vaultline` on Linux). A lockfile refuses
 concurrent runs — with stale-lock recovery: a lock whose recorded
-holder pid is DEAD (a crashed run) is reclaimed with a warning, while
-a live holder is refused as before (ADR-007).
+holder is DEAD (a crashed run) or whose recorded pid was REUSED (the
+same pid, a different process start time) is reclaimed with a warning,
+while a live holder is refused as before (ADR-007).
 
 ### `vaultline backup list`
 

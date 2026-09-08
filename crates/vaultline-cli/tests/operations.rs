@@ -554,6 +554,71 @@ fn stale_lock_is_refused_while_alive_and_reclaimed_when_dead() {
         .stdout(predicate::str::contains("backup complete"));
 }
 
+/// The pid-reuse defense (ADR-007, the fix-round hardening): a lock whose
+/// recorded pid is ALIVE but whose recorded start time differs from the
+/// current process at that pid is a REUSED pid — the crashed holder is
+/// gone and an unrelated process inherited its pid. Reclaimed by the same
+/// evidence path; the matching-start-time case stays refused.
+#[test]
+fn a_reused_pid_is_reclaimed_and_the_matching_holder_is_refused() {
+    let Some(mut cmd) = op_cmd() else {
+        eprintln!("skipping: restic not available (VAULTLINE_RESTIC_BIN or PATH)");
+        return;
+    };
+    let fixture = Fixture::new();
+
+    // A live unrelated process standing in for the pid-reuse victim.
+    let mut holder = if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > nul"])
+            .spawn()
+            .expect("holder")
+    } else {
+        Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .expect("holder")
+    };
+    std::fs::create_dir_all(fixture.state_dir()).expect("state dir");
+
+    // The lock records the LIVE holder's pid with a start time that is
+    // not the real one (no live process started at 0): a reused pid —
+    // reclaimed, and the backup proceeds.
+    std::fs::write(
+        fixture.state_dir().join("lock"),
+        format!("pid {}\nstarted 0\n", holder.id()),
+    )
+    .expect("lock file");
+    cmd.args(["backup", "run", "--config"]).arg(&fixture.config);
+    fixture.envs(&mut cmd);
+    cmd.assert()
+        .success()
+        .stderr(predicate::str::contains("reclaiming the stale lock"))
+        .stdout(predicate::str::contains("backup complete"));
+
+    // The same live pid with its REAL start time: the same process the
+    // lock recorded — refused exactly like any held lock.
+    let started = vaultline_cli::backup::process_started(holder.id())
+        .expect("the start-time probe answers on this host");
+    std::fs::write(
+        fixture.state_dir().join("lock"),
+        format!("pid {}\nstarted {started}\n", holder.id()),
+    )
+    .expect("lock file");
+    let mut refused = vaultline();
+    fixture.envs(&mut refused);
+    refused
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("another vaultline process"));
+
+    let _ = holder.kill();
+    let _ = holder.wait();
+}
+
 /// The vanished-source defense (ADR-007): restic skips missing paths
 /// silently (verified empirically), so a declared source that vanished
 /// must abort the backup naming the path — never a silently-incomplete

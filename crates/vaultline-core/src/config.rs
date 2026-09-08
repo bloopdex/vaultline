@@ -160,6 +160,11 @@ pub struct WireVolume {
     /// only — validation rejects it with any other capture).
     #[serde(default)]
     pub container: Option<String>,
+    /// The sidecar image to copy the volume out with (sidecar only —
+    /// validation rejects it with any other capture). Defaults to
+    /// `alpine` when absent.
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -488,6 +493,23 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
             }
             _ => {}
         }
+        // The sidecar image is a sidecar-only override (defaults to
+        // `alpine`); on any other capture it is a meaningless field.
+        match (&volume.capture, volume.image.as_deref()) {
+            (WireCaptureSemantics::Sidecar, Some("")) => {
+                errors.push(ValidationError::new(
+                    format!("application.volumes[{i}].image"),
+                    "the sidecar image must not be empty",
+                ));
+            }
+            (WireCaptureSemantics::Direct | WireCaptureSemantics::PauseFirst, Some(_)) => {
+                errors.push(ValidationError::new(
+                    format!("application.volumes[{i}].image"),
+                    "image is only meaningful with capture = \"sidecar\"",
+                ));
+            }
+            _ => {}
+        }
     }
 
     // Storage: per-kind required fields; credentials are env-var names.
@@ -547,6 +569,27 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
                 )),
                 Some(_) => {}
             }
+            // The ssh arguments are passed through restic's sftp.args
+            // tokenizer, which wraps paths in single quotes and has no
+            // escape inside quotes — quote and newline characters in a
+            // path are unrepresentable there (ADR-002 amendment part 3).
+            for (field, value) in [
+                ("key_file", &app.storage.key_file),
+                ("known_hosts", &app.storage.known_hosts),
+            ] {
+                let Some(path) = value else { continue };
+                if path.is_empty() {
+                    errors.push(ValidationError::new(
+                        format!("application.storage.{field}"),
+                        "must not be empty",
+                    ));
+                } else if path.contains(['\'', '"', '\r', '\n']) {
+                    errors.push(ValidationError::new(
+                        format!("application.storage.{field}"),
+                        "must not contain quote or newline characters (restic's sftp.args tokenizer cannot represent them)",
+                    ));
+                }
+            }
         }
     }
 
@@ -599,8 +642,8 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
         }
     }
 
-    // Verification: level range, and an honest warning for policy fields
-    // that are recorded but not yet executed.
+    // Verification: the level range; app checks execute in the L6
+    // rehearsal (ADR-006).
     let level = match VerificationLevel::from_number(app.verification.level) {
         Some(level) => Some(level),
         None => {
@@ -909,6 +952,7 @@ fn convert(
                 WireCaptureSemantics::PauseFirst => CaptureSemantics::PauseFirst,
             },
             container: v.container.clone(),
+            sidecar_image: v.image.clone(),
         })
         .collect();
 
@@ -1276,6 +1320,87 @@ level = 1
             "{:?}",
             outcome.errors
         );
+    }
+
+    #[test]
+    fn sidecar_image_is_only_meaningful_on_sidecar_capture() {
+        let valid = VALID.replace(
+            "capture = \"direct\"",
+            "capture = \"sidecar\"\nimage = \"alpine:3.20\"",
+        );
+        let outcome = validate(parse_str(&valid).expect("parse"));
+        assert!(outcome.is_valid(), "{:?}", outcome.errors);
+        assert_eq!(
+            outcome.application.expect("application").volumes[0]
+                .sidecar_image
+                .as_deref(),
+            Some("alpine:3.20"),
+            "the declared image converts"
+        );
+
+        let wrong_capture = VALID.replace(
+            "capture = \"direct\"",
+            "capture = \"direct\"\nimage = \"alpine:3.20\"",
+        );
+        let outcome = validate(parse_str(&wrong_capture).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome.errors.iter().any(|e| {
+                e.path.contains(".image") && e.message.contains("only meaningful with capture")
+            }),
+            "{:?}",
+            outcome.errors
+        );
+
+        let empty = VALID.replace(
+            "capture = \"direct\"",
+            "capture = \"sidecar\"\nimage = \"\"",
+        );
+        let outcome = validate(parse_str(&empty).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome
+                .errors
+                .iter()
+                .any(|e| e.path.contains(".image") && e.message.contains("must not be empty")),
+            "{:?}",
+            outcome.errors
+        );
+    }
+
+    #[test]
+    fn sftp_key_paths_reject_quote_characters() {
+        const SFTP: &str = "[application.storage]\n\
+            kind = \"sftp\"\n\
+            host = \"backup.example.com\"\n\
+            port = 2222\n\
+            user = \"backup\"\n\
+            path = \"/srv/backups\"\n\
+            password_env = \"RESTIC_PASSWORD_THORNWA\"";
+        const LOCAL: &str = "[application.storage]\n\
+            kind = \"local\"\n\
+            path = \"/var/backups/thornwa\"\n\
+            password_env = \"RESTIC_PASSWORD_THORNWA\"";
+
+        let quoted = VALID.replace(LOCAL, &format!("{SFTP}\nkey_file = \"/keys/o'reilly\""));
+        let outcome = validate(parse_str(&quoted).expect("parse"));
+        assert!(!outcome.is_valid());
+        assert!(
+            outcome.errors.iter().any(|e| {
+                e.path.contains(".key_file") && e.message.contains("quote or newline")
+            }),
+            "{:?}",
+            outcome.errors
+        );
+
+        let clean = VALID.replace(
+            LOCAL,
+            &format!(
+                "{SFTP}\nkey_file = \"/keys/id_ed25519\"\nknown_hosts = \"/keys/known_hosts\""
+            ),
+        );
+        let outcome = validate(parse_str(&clean).expect("parse"));
+        assert!(outcome.is_valid(), "{:?}", outcome.errors);
     }
 
     #[test]

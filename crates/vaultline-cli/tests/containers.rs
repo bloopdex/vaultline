@@ -1,5 +1,5 @@
-//! The container test harness — the infrastructure later phases run real
-//! database, SFTP, and MinIO integration tests on (docs/testing.md).
+//! The container test harness — the infrastructure the database, SFTP, and
+//! MinIO integration suites run on (docs/testing.md).
 //!
 //! These tests are `#[ignore]`d by default: they require a running Docker
 //! engine and pull images. Run them explicitly:
@@ -8,9 +8,9 @@
 //! cargo test --test containers -- --ignored
 //! ```
 //!
-//! What is proven here is the HARNESS (container start, port mapping,
-//! reachability) — the actual pg_dump / SFTP / MinIO interactions arrive with
-//! the phases that implement them.
+//! What is proven here is the HARNESS itself (container start, port
+//! mapping, reachability) — the per-backend interactions live in the
+//! suites that consume it (tests/storage.rs, tests/databases.rs).
 
 use std::net::TcpStream;
 use std::time::Duration;

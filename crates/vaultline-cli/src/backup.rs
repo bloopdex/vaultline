@@ -4,9 +4,11 @@
 //! `vaultline backup list` reads the state file.
 //!
 //! Honesty contract (failure-first): a snapshot record states exactly what
-//! it captured. Sources not implemented yet (databases, volumes) are
-//! declared-but-not-captured — warned on stderr and recorded in the
-//! snapshot's configuration metadata, never silently included.
+//! it captured — every declared source, database, and volume executes
+//! (the three volume capture semantics included, ADR-V0-8), and the
+//! snapshot's manifest records each capture path. The pre-flight defends
+//! the run: a vanished source aborts the backup naming the path rather
+//! than recording a silently-incomplete snapshot.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,7 +25,7 @@ use vaultline_core::model::{
     IntegrityInfo, RestoreMetadata, SourceKind, SourceManifest, SourceManifestEntry, StorageKind,
     VerificationLevel,
 };
-use vaultline_core::state::{State, StateLock};
+use vaultline_core::state::State;
 
 use crate::engine::Restic;
 use crate::metrics;
@@ -75,6 +77,72 @@ pub fn process_is_alive(pid: u32) -> bool {
         let _ = pid;
         true
     }
+}
+
+/// The start time of the process with the given pid, as the platform can
+/// best express it (ADR-007's pid-reuse defense: a live pid whose start
+/// time differs from the lock's record is a REUSED pid, not the holder).
+/// Linux reads /proc/<pid>/stat directly (no spawn); Windows asks
+/// PowerShell for StartTime (a spawn — paid once per command at lock
+/// acquisition, and only on contention after that; recorded cost). None
+/// when the platform has no probe (non-Linux unix) or the probe cannot
+/// answer — the lock then degrades to liveness-only, honestly.
+pub fn process_started(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // The stat line is "pid (comm) rest...": the comm may contain
+        // spaces and parens, so everything after the LAST ')' holds the
+        // numeric fields — field 3 (state) onwards. Starttime is field
+        // 22, i.e. index 19 of that tail.
+        let after = stat.rsplit_once(')')?.1;
+        Some(after.split_whitespace().nth(19)?.to_string())
+    }
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("(Get-Process -Id {pid}).StartTime.ToFileTimeUtc()"),
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        Some(text.trim().to_string()).filter(|s| !s.is_empty())
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// The contention checker (ADR-007): a holder is alive when it is the
+/// SAME process the lock recorded — the pid is live AND (when the lock
+/// recorded a start time) the current process at that pid started at the
+/// recorded time. A pid-only lock (an earlier build's) falls back to
+/// liveness alone. Fail-safe: an unanswerable probe reads as alive —
+/// never reclaim without evidence.
+fn holder_is_alive(pid: u32, recorded_started: Option<&str>) -> bool {
+    match recorded_started {
+        Some(recorded) => process_started(pid).is_none_or(|current| current == recorded),
+        None => process_is_alive(pid),
+    }
+}
+
+/// The state lock with the platform probes wired: the holder's start
+/// time is recorded at acquisition and verified at contention.
+pub fn state_lock(state_dir: &Path) -> Result<vaultline_core::state::StateLock> {
+    vaultline_core::state::StateLock::acquire_with(
+        state_dir,
+        &|| process_started(std::process::id()),
+        &holder_is_alive,
+    )
 }
 
 /// The state directory: `VAULTLINE_STATE_DIR` overrides, else the platform
@@ -175,19 +243,61 @@ pub fn storage_envs(app: &Application) -> Result<Vec<(String, String)>> {
             known_hosts,
             ..
         } => {
-            // The custom-ssh-command path (restic -o sftp.command) involves
-            // restic's own shell splitting of that string — that conflicts
-            // with the argv-only discipline. Deferred: ssh-agent and
-            // ~/.ssh/config work today (ADR-V0-2).
-            if key_file.is_some() || known_hosts.is_some() {
-                return Err(VaultlineError::new(
-                    ErrorKind::Unsupported,
-                    "application.storage: key_file/known_hosts are not wired yet (ssh-agent and ~/.ssh/config work today)",
-                ));
+            // The declared files must exist — a missing key surfaces as a
+            // named configuration error, not an opaque ssh failure.
+            for (field, path) in [("key_file", key_file), ("known_hosts", known_hosts)] {
+                if let Some(path) = path {
+                    if Path::new(path).is_file() {
+                        continue;
+                    }
+                    return Err(VaultlineError::new(
+                        ErrorKind::Config,
+                        format!(
+                            "application.storage.{field}: {path} does not exist or is not a file"
+                        ),
+                    ));
+                }
             }
             Ok(Vec::new())
         }
     }
+}
+
+/// The extra restic arguments for an sftp target whose `key_file` /
+/// `known_hosts` are declared (ADR-002 amendment part 3): `-o
+/// sftp.args=<tokens>` extends the native ssh argv restic builds —
+/// `-o BatchMode=yes` (prompts become clean failures: restic's stdin is
+/// the sftp pipe) plus `-i '<key_file>'` / `-o
+/// UserKnownHostsFile='<known_hosts>'`. Evidence (restic source,
+/// 2026-09-08): the sftp backend always execs the native ssh client and
+/// tokenizes the option string with its shell-splitter, then hands the
+/// tokens to exec.Command as argv — no shell executes anywhere in the
+/// chain. Single-quoting is unambiguous because validation rejects quote
+/// and newline characters in the paths. Returns None when neither field
+/// is declared (the agent / ~/.ssh/config path, unchanged).
+pub fn restic_sftp_opts(app: &Application) -> Option<Vec<String>> {
+    let StorageKind::Sftp {
+        key_file,
+        known_hosts,
+        ..
+    } = &app.storage.kind
+    else {
+        return None;
+    };
+    if key_file.is_none() && known_hosts.is_none() {
+        return None;
+    }
+    let mut tokens = vec!["-o BatchMode=yes".to_string()];
+    if let Some(key) = key_file {
+        tokens.push(format!("-i '{key}'"));
+    }
+    if let Some(hosts) = known_hosts {
+        tokens.push(format!("-o UserKnownHostsFile='{hosts}'"));
+    }
+    Some(vec![
+        "-o".to_string(),
+        format!("sftp.args={}", tokens.join(" ")),
+    ])
 }
 
 fn resolve_env(name: &str) -> Result<String> {
@@ -423,14 +533,38 @@ fn pause_container(container: &str) -> Result<ContainerPause> {
     }
 }
 
+/// The docker argv for a sidecar capture (pure so the image choice is
+/// unit-testable): the volume is mounted READ-ONLY into a throwaway
+/// container that copies it into a host staging directory (bind-mounted
+/// into the container) — argv-only, no shell.
+fn sidecar_argv(volume_name: &str, host_half: &str, image: &str) -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "--rm".to_string(),
+        "-v".to_string(),
+        format!("{volume_name}:/vaultline-src:ro"),
+        "-v".to_string(),
+        format!("{host_half}:/vaultline-out:rw"),
+        image.to_string(),
+        "cp".to_string(),
+        "-a".to_string(),
+        "/vaultline-src/.".to_string(),
+        "/vaultline-out/".to_string(),
+    ]
+}
+
 /// Sidecar capture (the second of ADR-V0-3's volume semantics): the
-/// volume is mounted READ-ONLY into a throwaway alpine container that
-/// copies it into a host staging directory (bind-mounted into the
-/// container) — argv-only, no shell. This is the semantics that works
-/// where the host cannot reach the volume's mountpoint (Docker Desktop
-/// keeps volumes inside its VM). The alpine image is pulled on first
-/// use. The staging dir must stay alive for the backup run.
-pub fn stage_sidecar_capture(volume_name: &str) -> Result<(tempfile::TempDir, PathBuf)> {
+/// volume is mounted READ-ONLY into a throwaway container that copies it
+/// into a host staging directory (bind-mounted into the container) —
+/// argv-only, no shell. This is the semantics that works where the host
+/// cannot reach the volume's mountpoint (Docker Desktop keeps volumes
+/// inside its VM). The image is the volume's declared sidecar image (or
+/// `alpine`); it is pulled on first use. The staging dir must stay alive
+/// for the backup run.
+pub fn stage_sidecar_capture(
+    volume_name: &str,
+    image: &str,
+) -> Result<(tempfile::TempDir, PathBuf)> {
     let staging = tempfile::tempdir().map_err(|e| {
         VaultlineError::with_source(
             ErrorKind::Io,
@@ -446,22 +580,10 @@ pub fn stage_sidecar_capture(volume_name: &str) -> Result<(tempfile::TempDir, Pa
     let host_half = target.display().to_string().replace('\\', "/");
     info!(
         volume = volume_name,
-        "capturing the volume through a read-only sidecar container"
+        image, "capturing the volume through a read-only sidecar container"
     );
     let output = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "-v",
-            &format!("{volume_name}:/vaultline-src:ro"),
-            "-v",
-            &format!("{host_half}:/vaultline-out:rw"),
-            "alpine",
-            "cp",
-            "-a",
-            "/vaultline-src/.",
-            "/vaultline-out/",
-        ])
+        .args(sidecar_argv(volume_name, &host_half, image))
         .output()
         .map_err(|e| {
             VaultlineError::with_source(
@@ -474,7 +596,7 @@ pub fn stage_sidecar_capture(volume_name: &str) -> Result<(tempfile::TempDir, Pa
         return Err(VaultlineError::new(
             ErrorKind::Operational,
             format!(
-                "the sidecar capture of volume \"{volume_name}\" failed: {} (the alpine image must be present or pullable)",
+                "the sidecar capture of volume \"{volume_name}\" failed: {} (the {image} image must be present or pullable)",
                 String::from_utf8_lossy(&output.stderr)
                     .lines()
                     .rev()
@@ -491,11 +613,12 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
     let app = config::load(&args.config)?;
 
     let state_dir = state_dir()?;
-    let _lock = StateLock::acquire_with(&state_dir, &process_is_alive)?;
+    let _lock = state_lock(&state_dir)?;
     let restic = Restic::locate()?;
     let password = resolve_password(&app)?;
     let repo = repo_url(&app)?;
     let extra_envs = storage_envs(&app)?;
+    let sftp_opts = restic_sftp_opts(&app).unwrap_or_default();
 
     // Capture plan: walk the declared sources, stage what needs staging,
     // and record the manifest exactly.
@@ -632,7 +755,8 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
                 reconstructs.push(volume.name.clone());
             }
             CaptureSemantics::Sidecar => {
-                let (staging, target) = stage_sidecar_capture(&volume.name)?;
+                let image = volume.sidecar_image.as_deref().unwrap_or("alpine");
+                let (staging, target) = stage_sidecar_capture(&volume.name, image)?;
                 backup_paths.push(target.clone());
                 _staging.push(staging);
                 manifest_entries.push(SourceManifestEntry {
@@ -672,9 +796,16 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
     }
 
     let started = Instant::now();
-    restic.init_if_needed(&repo, &password, &extra_envs)?;
+    restic.init_if_needed(&repo, &password, &extra_envs, &sftp_opts)?;
     let path_refs: Vec<&Path> = backup_paths.iter().map(|p| p.as_path()).collect();
-    let summary = restic.backup(&repo, &password, &path_refs, &excludes, &extra_envs)?;
+    let summary = restic.backup(
+        &repo,
+        &password,
+        &path_refs,
+        &excludes,
+        &extra_envs,
+        &sftp_opts,
+    )?;
     let duration_ms = started.elapsed().as_millis() as u64;
 
     // The verification policy: L2 (repository integrity) runs inline when
@@ -682,7 +813,7 @@ pub fn run_backup(args: BackupRunArgs) -> Result<()> {
     let mut engine_verified = false;
     let mut highest_level = VerificationLevel::L1;
     if app.verification.level >= VerificationLevel::L2 {
-        match restic.check(&repo, &password, &extra_envs) {
+        match restic.check(&repo, &password, &extra_envs, &sftp_opts) {
             Ok(()) => {
                 engine_verified = true;
                 highest_level = VerificationLevel::L2;
@@ -891,7 +1022,52 @@ mod tests {
     }
 
     #[test]
-    fn sftp_key_file_is_deferred_with_a_clear_error() {
+    fn sftp_opts_are_none_without_declared_key_paths() {
+        let app = app_with(StorageTarget {
+            kind: StorageKind::Sftp {
+                host: "backup.example.com".to_string(),
+                port: 2222,
+                user: "backup".to_string(),
+                path: "/srv/backups".to_string(),
+                key_file: None,
+                known_hosts: None,
+            },
+            repository: None,
+            password_env: "PW".to_string(),
+        });
+        assert!(restic_sftp_opts(&app).is_none(), "no fields → no opts");
+    }
+
+    #[test]
+    fn sftp_opts_quote_the_key_and_hosts_file_argv_safely() {
+        let app = app_with(StorageTarget {
+            kind: StorageKind::Sftp {
+                host: "backup.example.com".to_string(),
+                port: 2222,
+                user: "backup".to_string(),
+                path: "/srv/backups".to_string(),
+                key_file: Some("/home/me/key".to_string()),
+                known_hosts: Some("/home/me/known hosts".to_string()),
+            },
+            repository: None,
+            password_env: "PW".to_string(),
+        });
+        assert_eq!(
+            restic_sftp_opts(&app).expect("opts"),
+            // The single restic argv pair: the tokens extend the native
+            // ssh invocation restic builds. Paths are single-quoted
+            // (restic's own tokenizer; no shell executes anywhere);
+            // BatchMode turns prompts into clean failures.
+            vec![
+                "-o".to_string(),
+                "sftp.args=-o BatchMode=yes -i '/home/me/key' -o UserKnownHostsFile='/home/me/known hosts'"
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn sftp_opts_cover_each_field_independently() {
         let app = app_with(StorageTarget {
             kind: StorageKind::Sftp {
                 host: "backup.example.com".to_string(),
@@ -904,9 +1080,68 @@ mod tests {
             repository: None,
             password_env: "PW".to_string(),
         });
-        let err = storage_envs(&app).expect_err("deferred");
+        assert_eq!(
+            restic_sftp_opts(&app).expect("opts"),
+            vec![
+                "-o".to_string(),
+                "sftp.args=-o BatchMode=yes -i '/home/me/key'".to_string()
+            ]
+        );
+        let app = app_with(StorageTarget {
+            kind: StorageKind::Sftp {
+                host: "backup.example.com".to_string(),
+                port: 22,
+                user: "backup".to_string(),
+                path: "/srv/backups".to_string(),
+                key_file: None,
+                known_hosts: Some("/home/me/known_hosts".to_string()),
+            },
+            repository: None,
+            password_env: "PW".to_string(),
+        });
+        assert_eq!(
+            restic_sftp_opts(&app).expect("opts"),
+            vec![
+                "-o".to_string(),
+                "sftp.args=-o BatchMode=yes -o UserKnownHostsFile='/home/me/known_hosts'"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn sftp_missing_key_file_is_a_named_configuration_error() {
+        let app = app_with(StorageTarget {
+            kind: StorageKind::Sftp {
+                host: "backup.example.com".to_string(),
+                port: 22,
+                user: "backup".to_string(),
+                path: "/srv/backups".to_string(),
+                key_file: Some("/definitely/not/a/real/key".to_string()),
+                known_hosts: None,
+            },
+            repository: None,
+            password_env: "PW".to_string(),
+        });
+        let err = storage_envs(&app).expect_err("missing file");
         assert!(err.to_string().contains("key_file"));
         assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn sidecar_argv_uses_the_declared_image_and_defaults_to_alpine() {
+        let args = sidecar_argv("data", "/tmp/stage", "alpine:3.20");
+        assert_eq!(args[0], "run");
+        assert_eq!(args[1], "--rm");
+        assert_eq!(args[2], "-v");
+        assert_eq!(args[3], "data:/vaultline-src:ro");
+        assert_eq!(args[4], "-v");
+        assert_eq!(args[5], "/tmp/stage:/vaultline-out:rw");
+        assert_eq!(args[6], "alpine:3.20", "the declared image is used");
+        assert_eq!(args[7], "cp");
+        assert_eq!(args[8], "-a");
+        assert_eq!(args[9], "/vaultline-src/.");
+        assert_eq!(args[10], "/vaultline-out/");
     }
 
     #[test]

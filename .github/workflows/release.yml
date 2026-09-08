@@ -6,9 +6,10 @@
 #   3. smoke-tests each artifact (version + template round trip),
 #   4. assembles the bundle with SHA256SUMS and the installers and
 #      publishes the release through the gh CLI.
-# Hosted execution begins when the repository is hosted (the workflow
-# is validated locally by scripts/check-workflows.py). CI runs the
-# full gates on tags regardless.
+# Executes on tag pushes at github.com/bloopdex/vaultline (v0.8.0
+# published 2026-09-07); validated locally by
+# scripts/check-workflows.py. CI runs the full gates on tags
+# regardless.
 
 name: release
 
