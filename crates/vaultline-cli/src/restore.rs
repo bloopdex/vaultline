@@ -199,12 +199,14 @@ pub fn snapshot_path_of(host_path: &str) -> String {
     slashed
 }
 
-/// Copy a directory tree into a destination: directories are created,
-/// files are copied, and an existing destination FILE is an error (safe
-/// by default — promotion never silently overwrites).
+/// Copy a source into a destination: directories are copied
+/// recursively, a single FILE lands as `dst/<file-name>` (the
+/// 1.0-finalization smoke finding: file-shaped sources restored as
+/// "does not exist"), and an existing destination FILE is an error
+/// (safe by default — promotion never silently overwrites).
 pub fn copy_tree_into(src: &Path, dst: &Path) -> Result<u64> {
     let mut copied = 0u64;
-    if !src.is_dir() {
+    if !src.exists() {
         return Err(VaultlineError::new(
             ErrorKind::Operational,
             format!(
@@ -212,6 +214,22 @@ pub fn copy_tree_into(src: &Path, dst: &Path) -> Result<u64> {
                 src.display()
             ),
         ));
+    }
+    if src.is_file() {
+        let to = dst.join(src.file_name().ok_or_else(|| {
+            VaultlineError::new(
+                ErrorKind::Operational,
+                "the restored source path has no file name",
+            )
+        })?);
+        std::fs::create_dir_all(dst).map_err(|e| {
+            VaultlineError::with_source(
+                ErrorKind::Io,
+                format!("cannot create {}", dst.display()),
+                e,
+            )
+        })?;
+        return copy_without_overwrite(src, &to).map(|_| 1);
     }
     std::fs::create_dir_all(dst).map_err(|e| {
         VaultlineError::with_source(ErrorKind::Io, format!("cannot create {}", dst.display()), e)
@@ -785,13 +803,17 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
 /// restored FILE path (the restore-side checks verify the restored copy).
 type RestoredDatabases = Vec<(String, Option<PathBuf>)>;
 
-/// Restore a docker volume whose mountpoint the host cannot reach (the
-/// Desktop-VM case): the bytes enter through a throwaway container —
-/// argv-only, no shell. The never-overwrite contract is preserved by a
-/// read-only listing pass FIRST: any file the volume already holds that
-/// the snapshot would restore is an error naming the file, exactly like
-/// the direct copy's collision (the 1.0-finalization DR-proof finding:
-/// the earlier restore wrote the volume's bytes to a phantom host path).
+/// Restore a docker volume: the bytes enter through a throwaway
+/// container — argv-only, no shell. Uniform for every docker volume
+/// because the docker-reported mountpoint may be unreachable from the
+/// host (Desktop VMs) or unwritable (root-owned docker-data on native
+/// hosts). The never-overwrite contract is preserved by a read-only
+/// listing pass FIRST: any file the volume already holds that the
+/// snapshot would restore is an error naming the file, exactly like the
+/// direct copy's collision (the 1.0-finalization DR-proof findings:
+/// the earlier restore wrote the bytes to a phantom host path on
+/// Desktop, and hit PermissionDenied on the hosted runner's root-owned
+/// docker data).
 fn restore_docker_volume_through_container(volume_name: &str, snapshot_dir: &Path) -> Result<u64> {
     // 1. The volume's existing files (a read-only listing container).
     let listed = Command::new("docker")
@@ -1014,13 +1036,17 @@ fn execute_steps(
                     .and_then(|entry| entry.path.as_deref());
                 let source_form = recorded.unwrap_or(resolved_path.as_str());
                 let in_snapshot = restored_root.join(trim_root(&snapshot_path_of(source_form)));
-                // When the docker-reported mountpoint is NOT reachable
-                // from this host (Docker Desktop keeps volumes inside its
-                // VM — the same environmental fact the capture pre-flight
-                // names), the bytes land through a reverse-sidecar
-                // container instead of a phantom host path (the
-                // 1.0-finalization DR-proof finding).
-                let count = if resolved.from_docker && !resolved.path.exists() {
+                // Docker volumes ALWAYS restore through a throwaway
+                // container (the reverse of the sidecar capture): the
+                // docker-reported mountpoint may be unreachable from the
+                // host (Docker Desktop keeps it inside its VM — the
+                // 1.0-finalization DR-proof finding: the old direct copy
+                // wrote to a PHANTOM host path) or unwritable (native
+                // hosts where the docker-data directory is root-only —
+                // the hosted CI's first run of the proof). Host-path
+                // volumes (operator-writable directories) restore
+                // directly.
+                let count = if resolved.from_docker {
                     restore_docker_volume_through_container(volume, &in_snapshot)?
                 } else {
                     let target = remap_path(&resolved_path);
@@ -1509,7 +1535,7 @@ fn copy_without_overwrite(src: &Path, dst: &Path) -> Result<()> {
         return Err(VaultlineError::new(
             ErrorKind::Operational,
             format!(
-                "refusing to overwrite existing file {} during database restoration",
+                "refusing to overwrite existing file {} during promotion",
                 dst.display()
             ),
         ));

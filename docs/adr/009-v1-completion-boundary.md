@@ -75,6 +75,24 @@ coverage matrix) and fixed as part of 1.0.
    silently-useless snapshot.** Fixed: the capture validates the PGDMP
    signature of a custom-format dump and aborts naming the dump.
    Regression test: `garbage_pgdump_output_fails_the_capture`.
+3. **`restore_volume` on hosts where the docker-reported mountpoint is
+   unreachable or unwritable** (the DR proof's own finding): on Docker
+   Desktop the old direct copy wrote the bytes to a PHANTOM host path
+   (the VM-internal mountpoint string resolved on the current drive);
+   on the hosted runner it hit PermissionDenied (root-owned docker
+   data). Fixed: docker volumes ALWAYS restore through a throwaway
+   container (the reverse of the sidecar capture), with the
+   never-overwrite contract preserved by a read-only listing pass
+   first. Regression tests:
+   `docker_volume_restores_through_the_reverse_sidecar` (proven on
+   both Desktop and the hosted runner) and the DR proof's own two-path
+   cycle.
+4. **Single-FILE sources could not restore** (the clean-checkout
+   smoke's finding): the promotion copy handled directories only, so a
+   file-shaped source was reported as "does not exist in the
+   snapshot". Fixed: the copy handles both shapes — a single file
+   lands as `target/<file-name>` under the same never-overwrite
+   contract. Regression test: `a_single_file_source_restores`.
 
 ## The raw-recovery path (--from-engine)
 

@@ -1293,3 +1293,70 @@ fn find_any(dir: &Path, name: &str) -> Option<PathBuf> {
     }
     None
 }
+
+/// A single-FILE source restores correctly (the 1.0-finalization smoke
+/// finding: file-shaped sources were reported as "does not exist" by
+/// the directory-only copy).
+#[test]
+fn a_single_file_source_restores() {
+    if restic_bin().is_none() {
+        eprintln!("skipping: restic not available");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let payload = dir.path().join("hello.txt");
+    std::fs::write(&payload, "solo file").expect("payload");
+    let repo_parent = dir.path().join("repos");
+    let target = dir.path().join("restored");
+    let config = dir.path().join("vaultline.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"
+[application]
+name = "thornwa"
+[[application.sources.files]]
+name = "uploads"
+paths = ["{payload}"]
+[application.storage]
+kind = "local"
+path = "{repo_parent}"
+password_env = "VAULTLINE_TEST_PASSWORD"
+[application.retention]
+keep_last = 1
+[application.verification]
+level = 1
+[[application.restore.steps]]
+restore_files = {{ source = "uploads", target = "{target}/uploads" }}
+"#,
+            payload = toml_path(&payload),
+            repo_parent = toml_path(&repo_parent),
+            target = toml_path(&target),
+        ),
+    )
+    .expect("config");
+
+    vaultline()
+        .args(["backup", "run", "--config"])
+        .arg(&config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", dir.path().join("state"))
+        .assert()
+        .success();
+
+    vaultline()
+        .args(["restore", "latest", "--config"])
+        .arg(&config)
+        .arg("--target")
+        .arg(dir.path().join("restore-root"))
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", dir.path().join("state"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("restore complete"));
+
+    assert_eq!(
+        std::fs::read_to_string(target.join("uploads/hello.txt")).expect("restored"),
+        "solo file"
+    );
+}

@@ -29,10 +29,14 @@ promised scope closed by evidence.
   never-booted empty volume, 1579 files, 6.5 s — postgres then BOOTED
   HEALTHY from the restored data with the database intact). The proof
   caught a real defect, fixed with a regression test: on hosts where
-  the docker-reported mountpoint is unreachable (Docker Desktop),
-  `restore_volume` wrote the bytes to a phantom host path — it now
-  restores through a reverse-sidecar container with the
-  never-overwrite contract preserved by a listing check.
+  the docker-reported mountpoint is unreachable (Docker Desktop) or
+  unwritable (the hosted runner's root-owned docker data),
+  `restore_volume` wrote the bytes to a phantom host path or failed
+  with PermissionDenied — docker volumes now ALWAYS restore through a
+  reverse-sidecar container with the never-overwrite contract
+  preserved by a listing check. The clean-checkout smoke caught a
+  fourth: single-FILE sources could not restore (the copy handled
+  directories only) — fixed, with a regression test.
 - **The failure-mode matrix closed**: every failure case has
   detect/report/safe-state/test; five new tests cover the genuine gaps
   (state-save atomicity, concurrent restore, the runtime
