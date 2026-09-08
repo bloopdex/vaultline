@@ -6,12 +6,12 @@
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/install.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts/install.ps1 -Version 0.9.0
+#   powershell -ExecutionPolicy Bypass -File scripts/install.ps1 -Version 1.0.0
 #
 # The release base is the repository's published release downloads;
 # -ReleaseBase overrides it (mirrors, self-hosted proxies).
 param(
-    [string]$Version = "0.9.0",
+    [string]$Version = "1.0.0",
     [string]$ReleaseBase = "https://github.com/bloopdex/vaultline/releases/download"
 )
 
