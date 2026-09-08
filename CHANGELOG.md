@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.0.0 — 2026-09-08
+
+The final completion: every remaining recorded item classified and
+resolved (ADR-009), the real disaster-recovery proof executed, and the
+promised scope closed by evidence.
+
+- **The two finalization defects, found by the completion audits
+  themselves and fixed with regression tests**: `restore --verify`
+  checked the LIVE SQLite path instead of the restored copy placed at
+  the step's target (now the restored copy — corrupting the live file
+  no longer fails the verify); a pg_dump exiting 0 with garbage output
+  produced a silently-useless snapshot (the capture now validates the
+  PGDMP signature and aborts named).
+- **The raw-recovery path** (`restore --from-engine`): with the state
+  file gone (it died with the VPS), the engine's own snapshot list
+  drives a whole-snapshot restore — no state record, no procedure;
+  the full procedure returns once the state file is recovered from its
+  offsite copy. docs/disaster-recovery.md is the complete runbook for
+  both paths, including the state-file backup step.
+- **The disaster-recovery proof** on the real ThornWA-shaped stack:
+  backup (1592 files / 72.57 MB, 20.8 s, L2) → the stack destroyed
+  (`docker compose down -v`, the OpenWA volume deleted) → clean
+  environment → restore path 1 (the definition: 8 migrations, the
+  database back through pg_restore with the 2 users rows
+  byte-identical, the 4 OpenWA files back inside the real volume —
+  4.5 s) → restore path 2 (the entire postgres data volume into a
+  never-booted empty volume, 1579 files, 6.5 s — postgres then BOOTED
+  HEALTHY from the restored data with the database intact). The proof
+  caught a real defect, fixed with a regression test: on hosts where
+  the docker-reported mountpoint is unreachable (Docker Desktop),
+  `restore_volume` wrote the bytes to a phantom host path — it now
+  restores through a reverse-sidecar container with the
+  never-overwrite contract preserved by a listing check.
+- **The failure-mode matrix closed**: every failure case has
+  detect/report/safe-state/test; five new tests cover the genuine gaps
+  (state-save atomicity, concurrent restore, the runtime
+  invalid-restore-path messages, the missing-dependency message, the
+  L3 engine-lost snapshot).
+- **Targeted sanitizer fuzzing**: one cargo-fuzz target (the
+  configuration parser) as a 60-second libFuzzer+ASan smoke on a
+  nightly CI job (weekly + manual). The stable-rust mutation harness
+  remains the every-push proof.
+- **The startup benchmark** (SOT Section 12's CLI requirement): the
+  release binary's spawn-to-exit for `version`, 9.05 ms median,
+  committed with the 3x regression gate.
+- **The documentation synchronized**: the docs audit's findings fixed
+  (architecture, security, testing, cli, observability, config, the
+  ADR amendments), the README gained the installers, the DR runbook
+  written — the ten user-scope questions each answerable from a named
+  doc section.
+- **ADR-009** records the classification of every remaining item (the
+  conditional items with their triggers, the optional-evolution items
+  with their triggers, the by-design records verified) and the 1.0
+  acceptance criteria.
+
 ## 0.9.0 — 2026-09-08
 
 The fix round — every recorded product problem from the eight phases is

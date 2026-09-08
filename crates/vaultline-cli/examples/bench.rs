@@ -1,10 +1,11 @@
 //! The benchmark baseline (ADR-007 / SOT Section 12: baseline before
 //! target). Deterministic std-only measurements of the hot paths:
 //! configuration load+validate, the retention plan over a large snapshot
-//! history, cron next-occurrence evaluation, and the state-file round
-//! trip. Run with `cargo run --release --example bench`; the JSON on
-//! stdout is compared against docs/benchmarks/baseline.json by
-//! scripts/bench-check.py.
+//! history, cron next-occurrence evaluation, the state-file round trip,
+//! and the CLI startup (`vaultline version` spawn-to-exit — Section 12's
+//! startup-time check for CLI projects). Run with `cargo run --release
+//! --example bench`; the JSON on stdout is compared against
+//! docs/benchmarks/baseline.json by scripts/bench-check.py.
 //!
 //! Medians, not means: one slow scheduler slice must not move a baseline.
 
@@ -132,6 +133,26 @@ fn snapshot_history(count: usize) -> Vec<BackupSnapshot> {
         .collect()
 }
 
+/// The sibling release binary (cargo sets CARGO_BIN_EXE_vaultline at
+/// runtime; the fallback covers a direct invocation of the example).
+fn vaultline_bin() -> std::path::PathBuf {
+    if let Ok(bin) = std::env::var("CARGO_BIN_EXE_vaultline") {
+        return std::path::PathBuf::from(bin);
+    }
+    let mut bin = std::env::current_exe()
+        .expect("current exe")
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("bin dir")
+        .to_path_buf();
+    bin.push(if cfg!(windows) {
+        "vaultline.exe"
+    } else {
+        "vaultline"
+    });
+    bin
+}
+
 fn main() {
     let policy = vaultline_core::model::RetentionPolicy {
         keep_last: 14,
@@ -173,6 +194,15 @@ fn main() {
                 loaded.applications["thornwa"].snapshots.len(),
                 1000
             );
+        }),
+        // CLI startup: the same package's release binary, spawn-to-exit
+        // for the `version` command (std-only).
+        "startup_version": measure(50, || {
+            let out = std::process::Command::new(vaultline_bin())
+                .arg("version")
+                .output()
+                .expect("spawns");
+            assert!(out.status.success(), "version exits 0");
         }),
     });
     println!(

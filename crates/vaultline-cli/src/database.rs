@@ -400,6 +400,20 @@ fn capture_postgresql(name: &str, conn: &ConnInfo, dump_path: &Path) -> Result<(
             ),
         ));
     }
+    // A dump that exits 0 with garbage output is not a dump: the -Fc
+    // custom format always begins with the PGDMP signature. Checking it
+    // here turns a silently-useless snapshot into a named failure at
+    // backup time (the 1.0-finalization finding — previously only the
+    // test suite verified the magic, post-hoc).
+    if !output.stdout.starts_with(b"PGDMP") {
+        return Err(VaultlineError::new(
+            ErrorKind::Operational,
+            format!(
+                "pg_dump for database \"{name}\" produced an invalid custom-format dump (missing the PGDMP signature; {} byte(s) captured) — the backup is aborted rather than recording a useless snapshot",
+                output.stdout.len()
+            ),
+        ));
+    }
     std::fs::write(dump_path, &output.stdout).map_err(|e| {
         VaultlineError::with_source(
             ErrorKind::Io,

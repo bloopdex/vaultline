@@ -1,8 +1,7 @@
-//! The command surface. Two commands exist today: `init` (write a
-//! configuration template, safe-by-default) and `validate` (strict
-//! configuration checking). Backup, restore, verify, prune, doctor, and
-//! status arrive with their implementing phases — the full surface is
-//! recorded in ADR-V0-3's CLI hypothesis and docs/cli.md.
+//! The full command surface (docs/cli.md is the reference): `init`,
+//! `validate`, `backup run|list|verify|inspect|prune`, `restore`,
+//! `schedule run`, `doctor`, `status`, `timer generate|install`, and
+//! `version`.
 //!
 //! Exit codes (the documented contract): 0 success · 1 operational · 2
 //! usage/config. Logs go to stderr; stdout carries command output only.

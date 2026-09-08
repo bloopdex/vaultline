@@ -22,8 +22,7 @@ Emitted today:
 | Metric | Meaning |
 |---|---|
 | `backups_run` | 1 on a successful backup run |
-| `backups_failed` | 1 on a failed backup run |
-| `backup_duration_ms` | wall time of a backup run (quiesce + staging + restic + check) |
+| `backup_duration_ms` | wall time of the engine half of a backup run (repository init + restic backup + the inline L2 check; the capture plan runs before the timer starts) |
 | `verification_level_reached` | highest level actually reached for the snapshot |
 | `backup_files_new` | files newly added to the repository (from restic's summary) |
 | `backup_bytes_processed` | bytes processed (from restic's summary) |

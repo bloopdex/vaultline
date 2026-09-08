@@ -92,6 +92,29 @@ non-Linux-unix lock degradation, the unmapped-target OS interpretation,
 and the pre-0.8.0 capture-path fallback — are recorded in
 [docs/limitations.md](docs/limitations.md) in the four-part form.
 
+## Install
+
+Prebuilt binaries ship with every release at
+https://github.com/bloopdex/vaultline/releases (checksum-verified
+installers, `docs/release/RELEASE-CHECKLIST.md` documents the pipeline):
+
+```sh
+# Linux x86_64 — downloads the static musl binary, verifies SHA-256,
+# installs to ~/.local/bin/vaultline
+sh -c "$(curl -fsSL https://github.com/bloopdex/vaultline/releases/download/v1.0.0/install.sh)"
+
+# or a pinned version / mirror
+sh scripts/install.sh 1.0.0
+```
+
+```powershell
+# Windows x86_64 — same contract, installs under %LOCALAPPDATA%\Programs
+powershell -ExecutionPolicy Bypass -File scripts/install.ps1 -Version 1.0.0
+```
+
+The only runtime requirement is a restic binary (plus the dump tools a
+definition's databases need — docs/cli.md's tool table).
+
 ## Quick start
 
 ```sh
@@ -114,6 +137,7 @@ Logs are JSON lines on stderr; stdout carries machine-readable command output.
 ## Documentation
 
 - [docs/index.md](docs/index.md) — the documentation tree
+- [docs/disaster-recovery.md](docs/disaster-recovery.md) — the VPS-disappears runbook
 - [docs/adr/](docs/adr/) — architecture decision records
 - [docs/architecture.md](docs/architecture.md) — design and crate layout
 - [docs/config.md](docs/config.md) — the `vaultline.toml` reference

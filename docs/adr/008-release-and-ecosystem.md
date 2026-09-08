@@ -86,7 +86,8 @@ verifies the tag against the single-sourced workspace version, builds
 the static musl Linux binary (ADR-V0-1's distribution story) and the
 Windows binary, smoke-tests each, and publishes through the gh CLI;
 `docs/release/RELEASE-CHECKLIST.md` is the reproducible procedure.
-Publication executes once the repository is hosted.
+Publication executed once the repository was hosted: v0.8.0 and v0.9.0
+are published releases (tag-driven workflow, verified assets).
 
 **The ecosystem edges stay declared, not implemented.** The SOT
 Section 7 rule: a signal edge activates when BOTH sides define the

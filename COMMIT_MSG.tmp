@@ -1,0 +1,43 @@
+Final completion toward v1.0: the two finalization fixes, raw recovery, the DR proof's reverse-sidecar fix, the audits, fuzzing, and docs
+
+The completion audits found and fixed two real defects (regression
+tests each): restore --verify checked the LIVE SQLite path instead of
+the restored copy placed at the step's target; a pg_dump exiting 0
+with garbage produced a silently-useless snapshot (the capture now
+validates the PGDMP signature).
+
+The disaster runbook audit found the honest hole in the defining
+scenario: on a fresh host the state file died with the VPS, so
+discovery was impossible. `restore --from-engine` restores the whole
+engine snapshot without the state record or the procedure (the
+manifest names live in the state record); docs/disaster-recovery.md
+is the complete runbook for both paths, including the state-file
+backup step.
+
+The disaster-recovery proof itself (the real ThornWA-shaped stack:
+backup 1592 files / 72.57 MB in 20.8 s, L2 -> `docker compose down
+-v` + the OpenWA volume deleted -> clean environment -> restore path
+1, the definition: 8 migrations, pg_restore with the 2 users rows
+byte-identical, the 4 OpenWA files back INSIDE the real volume in
+4.5 s -> restore path 2, the raw volume: 1579 pgdata files into a
+never-booted empty volume in 6.5 s, postgres then BOOTED HEALTHY
+from the restored data) caught a real defect, fixed here with a
+regression test: on hosts where the docker-reported mountpoint is
+unreachable, restore_volume wrote the bytes to a PHANTOM host path
+-- it now restores through a reverse-sidecar container with the
+never-overwrite contract preserved by a read-only listing pass
+first.
+
+Also: the failure-matrix closure (five new tests for the genuine
+gaps; the environmental cases documented); the targeted fuzzing
+decision (one cargo-fuzz target, the config parser, as a nightly
+libFuzzer+ASan CI smoke; the fuzz crate is workspace-excluded); the
+startup benchmark (9.05 ms median, committed with the 3x gate --
+SOT Section 12's CLI requirement); the docs audit's findings fixed
+across architecture/security/testing/cli/observability/config + the
+ADR-003/006/008 amendments + ADR-009 (the 1.0 completion boundary:
+every remaining item classified with its trigger) + the README
+installers + the DR runbook.
+
+193 tests passing, 0 failures, all gates green locally with Docker
+up (the full suite incl. every docker-gated proof).

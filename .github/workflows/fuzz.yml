@@ -1,0 +1,29 @@
+# The targeted sanitizer-fuzzing smoke (the 1.0-finalization decision):
+# ONE high-value target — the configuration parser, the largest
+# untrusted-input surface — run under libFuzzer + ASan on nightly for a
+# bounded budget. The stable-rust 2000-round mutation harness remains
+# the every-push proof (docs/testing.md); this job is the deeper
+# nightly exploration. Never claims more coverage than it runs.
+
+name: fuzz
+
+on:
+  schedule:
+    - cron: '37 3 * * 3'   # weekly, Wednesday 03:37
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-smoke:
+    name: config-parser fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Fuzz smoke (config parser, 60s budget)
+        working-directory: fuzz
+        run: cargo fuzz run config_parser -- -max_total_time=60

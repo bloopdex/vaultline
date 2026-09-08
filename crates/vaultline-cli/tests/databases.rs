@@ -926,6 +926,78 @@ container = "{writer}"
     let _ = Command::new("docker").args(["rm", "-f", &writer]).output();
 }
 
+/// A pg_dump that exits 0 with garbage output fails at CAPTURE time (the
+/// PGDMP signature check — the 1.0-finalization finding): a backup never
+/// records a silently-useless dump. No restic/Docker needed: the dump
+/// runs before the engine is involved.
+#[test]
+fn garbage_pgdump_output_fails_the_capture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("vaultline.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"
+[application]
+name = "thornwa"
+[[application.databases]]
+name = "main"
+kind = "postgresql"
+url_env = "TEST_DATABASE_URL"
+consistency = {{ logical = {{ format = "custom" }} }}
+[application.storage]
+kind = "local"
+path = "{repos}"
+password_env = "VAULTLINE_TEST_PASSWORD"
+[application.retention]
+keep_last = 1
+[application.verification]
+level = 1
+"#,
+            repos = dir
+                .path()
+                .join("repos")
+                .display()
+                .to_string()
+                .replace('\\', "/"),
+        ),
+    )
+    .expect("config");
+
+    // The fake dump tool: exits 0, prints garbage (platform-conditional
+    // shim — the same pattern the mariadb round trip uses).
+    #[cfg(windows)]
+    let shim = {
+        let shim = dir.path().join("garbage_pgdump.cmd");
+        std::fs::write(
+            &shim,
+            "@echo off\r\necho this is not a dump\r\nexit /b 0\r\n",
+        )
+        .expect("shim");
+        shim
+    };
+    #[cfg(unix)]
+    let shim = {
+        let shim = dir.path().join("garbage_pgdump");
+        std::fs::write(&shim, "#!/bin/sh\necho this is not a dump\nexit 0\n").expect("shim");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        shim
+    };
+
+    vaultline()
+        .args(["backup", "run", "--config"])
+        .arg(&config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", dir.path().join("state"))
+        .env("TEST_DATABASE_URL", "postgresql://u:p@127.0.0.1:5432/db")
+        .env("VAULTLINE_PGDUMP", &shim)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("PGDMP"));
+}
+
 /// A STOPPED writer is already quiescent — pause-first proceeds with a
 /// note instead of failing on the un-pausable container (evidence from
 /// the engine's state, never stderr-message matching).
@@ -973,4 +1045,170 @@ container = "{writer}"
         .success()
         .stderr(predicate::str::contains("quiescent"));
     let _ = Command::new("docker").args(["rm", "-f", &writer]).output();
+}
+
+/// A missing pg_dump dependency fails with a message naming the tool and
+/// the override variable (no restic/Docker needed — the dump runs first).
+#[test]
+fn missing_pgdump_dependency_is_named() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("vaultline.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"
+[application]
+name = "thornwa"
+[[application.databases]]
+name = "main"
+kind = "postgresql"
+url_env = "TEST_DATABASE_URL"
+consistency = {{ logical = {{ format = "custom" }} }}
+[application.storage]
+kind = "local"
+path = "{repos}"
+password_env = "VAULTLINE_TEST_PASSWORD"
+[application.retention]
+keep_last = 1
+[application.verification]
+level = 1
+"#,
+            repos = dir
+                .path()
+                .join("repos")
+                .display()
+                .to_string()
+                .replace('\\', "/"),
+        ),
+    )
+    .expect("config");
+
+    vaultline()
+        .args(["backup", "run", "--config"])
+        .arg(&config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", dir.path().join("state"))
+        .env("TEST_DATABASE_URL", "postgresql://u:p@127.0.0.1:5432/db")
+        .env("VAULTLINE_PGDUMP", dir.path().join("no-such-pgdump"))
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("does not exist"))
+        .stderr(predicate::str::contains("VAULTLINE_PGDUMP"));
+}
+
+/// The reverse-sidecar volume restore (the 1.0-finalization DR-proof
+/// finding): on hosts where the docker-reported mountpoint is NOT
+/// reachable (Docker Desktop), restore_volume lands the bytes INSIDE
+/// the volume through a throwaway container — never at a phantom host
+/// path. The round trip: a named volume with content → sidecar capture
+/// → wipe the volume → restore → the content is back in the volume
+/// (verified through a read-only container, not the host filesystem).
+#[test]
+fn docker_volume_restores_through_the_reverse_sidecar() {
+    if restic_bin().is_none() {
+        eprintln!("skipping: restic not available");
+        return;
+    }
+    if docker_available().is_none() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    let volume = format!("vl-dr-{}", std::process::id());
+    let _ = Command::new("docker")
+        .args(["volume", "rm", &volume])
+        .output();
+    let created = Command::new("docker")
+        .args(["volume", "create", &volume])
+        .output()
+        .expect("docker volume create");
+    assert!(created.status.success(), "volume created");
+
+    // Seed the volume through a throwaway container.
+    let seed = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{volume}:/v:rw"),
+            "alpine",
+            "sh",
+            "-c",
+            "echo payload > /v/data.txt",
+        ])
+        .output()
+        .expect("docker run");
+    assert!(seed.status.success(), "volume seeded");
+
+    append_database(
+        &fixture.config,
+        &format!(
+            r#"
+[[application.volumes]]
+name = "{volume}"
+capture = "sidecar"
+[[application.restore.steps]]
+restore_volume = {{ volume = "{volume}" }}
+"#,
+        ),
+    );
+
+    vaultline()
+        .args(["backup", "run", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("backup complete"));
+
+    // Wipe the volume: the disaster.
+    let wipe = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{volume}:/v:rw"),
+            "alpine",
+            "rm",
+            "/v/data.txt",
+        ])
+        .output()
+        .expect("docker run");
+    assert!(wipe.status.success(), "volume wiped");
+
+    vaultline()
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(fixture._dir.path().join("restore-target"))
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("restore complete"));
+
+    // The content is back INSIDE the volume (read through a container).
+    let read_back = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{volume}:/v:ro"),
+            "alpine",
+            "cat",
+            "/v/data.txt",
+        ])
+        .output()
+        .expect("docker run");
+    assert_eq!(
+        String::from_utf8_lossy(&read_back.stdout).trim(),
+        "payload",
+        "the volume's content is restored: {}",
+        String::from_utf8_lossy(&read_back.stderr)
+    );
+    let _ = Command::new("docker")
+        .args(["volume", "rm", &volume])
+        .output();
 }

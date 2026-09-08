@@ -1,2 +1,6 @@
 /target
 /dist
+# cargo-fuzz artifacts (the fuzz crate's build output, corpora, crashes)
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts

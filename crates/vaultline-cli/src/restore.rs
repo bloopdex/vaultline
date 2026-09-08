@@ -47,6 +47,14 @@ pub struct RestoreArgs {
     /// The snapshot: full id, unique prefix, or "latest".
     pub snapshot: String,
 
+    /// Raw recovery (the disaster path, docs/disaster-recovery.md):
+    /// restore the ENGINE snapshot directly into the target — no state
+    /// file, no restore procedure. The full procedure needs the state
+    /// record (back up the state directory). Selects `latest` or a
+    /// full/short engine snapshot id.
+    #[arg(long)]
+    pub from_engine: bool,
+
     /// The restore destination root (default: ./vaultline-restore).
     /// Restored data is staged under `<target>/.vaultline/<id>/` and then
     /// promoted into the procedure's declared destinations.
@@ -476,8 +484,126 @@ fn plan_steps(
     Ok(steps)
 }
 
+/// The raw-recovery path (`--from-engine`): the state file died with the
+/// destroyed host, so the engine's own snapshot list is the record.
+/// Restores the WHOLE engine snapshot into the target without the
+/// procedure — the manifest names live in the state record, so the
+/// operator gets the data back and picks the pieces (docs/
+/// disaster-recovery.md). Honest about its limits: the procedure-driven
+/// restore returns once the state directory is recovered from its
+/// offsite copy.
+fn run_engine_recovery(app: &Application, args: &RestoreArgs) -> Result<()> {
+    let restic = Restic::locate()?;
+    let password = resolve_password(app)?;
+    let repo = repo_url(app)?;
+    let extra_envs = storage_envs(app)?;
+    let sftp_opts = restic_sftp_opts(app).unwrap_or_default();
+    let snapshots = restic.list_snapshots(&repo, &password, &extra_envs, &sftp_opts)?;
+    if snapshots.is_empty() {
+        return Err(VaultlineError::new(
+            ErrorKind::Operational,
+            "the repository holds no snapshots — nothing to recover",
+        ));
+    }
+    // restic lists SHORT ids, oldest first; match a full id, a unique
+    // short prefix, or "latest" (the most recent entry).
+    let engine_id = if args.snapshot == "latest" {
+        snapshots
+            .last()
+            .and_then(|s| s["id"].as_str())
+            .ok_or_else(|| {
+                VaultlineError::new(
+                    ErrorKind::Operational,
+                    "the engine snapshot record lacks an id",
+                )
+            })?
+            .to_string()
+    } else {
+        let matches: Vec<String> = snapshots
+            .iter()
+            .filter_map(|s| s["id"].as_str())
+            .filter(|id| *id == args.snapshot || id.starts_with(args.snapshot.as_str()))
+            .map(str::to_string)
+            .collect();
+        match matches.len() {
+            1 => matches.into_iter().next().expect("one"),
+            0 => {
+                return Err(VaultlineError::new(
+                    ErrorKind::Operational,
+                    format!(
+                        "no engine snapshot matching \"{}\" in the repository",
+                        args.snapshot
+                    ),
+                ));
+            }
+            _ => {
+                return Err(VaultlineError::new(
+                    ErrorKind::Operational,
+                    format!(
+                        "snapshot selector \"{}\" is ambiguous ({} matches); use a longer prefix",
+                        args.snapshot,
+                        matches.len()
+                    ),
+                ));
+            }
+        }
+    };
+
+    if args.dry_run {
+        println!(
+            "raw recovery plan: engine snapshot {engine_id} → {} (the whole snapshot; the procedure-driven restore needs the state record)",
+            args.target.display()
+        );
+        return Ok(());
+    }
+    std::fs::create_dir_all(&args.target).map_err(|e| {
+        VaultlineError::with_source(
+            ErrorKind::Io,
+            format!(
+                "cannot create the recovery target {}",
+                args.target.display()
+            ),
+            e,
+        )
+    })?;
+    info!(
+        engine_snapshot = engine_id,
+        target = %args.target.display(),
+        "raw engine recovery"
+    );
+    let output = restic.run(
+        &["restore", &engine_id, "--target"],
+        &[args.target.display().to_string()],
+        &repo,
+        &password,
+        &extra_envs,
+        &sftp_opts,
+    )?;
+    if !output.status.success() {
+        // The recorded Windows timestamp quirk: the files may still be
+        // restored — the operator's inspection is the verification.
+        warn!(
+            "restic restore reported: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .rev()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+    }
+    println!(
+        "raw recovery complete: engine snapshot {engine_id} → {} (the restore PROCEDURE was not run — it needs the state record; see docs/disaster-recovery.md)",
+        args.target.display()
+    );
+    Ok(())
+}
+
 pub fn run_restore(args: RestoreArgs) -> Result<()> {
     let app = config::load(&args.config)?;
+    if args.from_engine {
+        return run_engine_recovery(&app, &args);
+    }
     let state = State::load(&crate::backup::state_dir()?.join("state.json"))?;
     let snapshot = select_snapshot(&state, &app.name, &args.snapshot)?;
     // The cross-platform path map: configuration entries first, CLI
@@ -631,7 +757,10 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
                 "application": app.name,
                 "snapshot": snapshot.id,
                 "files_restored": restored_files,
-                "databases_restored": restored_databases.clone(),
+                "databases_restored": restored_databases
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>(),
                 "volumes_restored": restored_volumes,
                 "duration_ms": duration_ms,
             }))
@@ -652,13 +781,153 @@ pub fn run_restore(args: RestoreArgs) -> Result<()> {
 /// mirror represents the production layout). Wait-health steps run as
 /// declared in both modes (the rehearsal's endpoint is the operator's
 /// rehearsal environment).
+/// The procedure's database outcomes: the name and, for SQLite, the
+/// restored FILE path (the restore-side checks verify the restored copy).
+type RestoredDatabases = Vec<(String, Option<PathBuf>)>;
+
+/// Restore a docker volume whose mountpoint the host cannot reach (the
+/// Desktop-VM case): the bytes enter through a throwaway container —
+/// argv-only, no shell. The never-overwrite contract is preserved by a
+/// read-only listing pass FIRST: any file the volume already holds that
+/// the snapshot would restore is an error naming the file, exactly like
+/// the direct copy's collision (the 1.0-finalization DR-proof finding:
+/// the earlier restore wrote the volume's bytes to a phantom host path).
+fn restore_docker_volume_through_container(volume_name: &str, snapshot_dir: &Path) -> Result<u64> {
+    // 1. The volume's existing files (a read-only listing container).
+    let listed = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{volume_name}:/vaultline-out:ro"),
+            "alpine",
+            "find",
+            "/vaultline-out",
+            "-type",
+            "f",
+        ])
+        .output()
+        .map_err(|e| {
+            VaultlineError::with_source(
+                ErrorKind::Operational,
+                format!("cannot list the volume \"{volume_name}\" for the restore"),
+                e,
+            )
+        })?;
+    if !listed.status.success() {
+        return Err(VaultlineError::new(
+            ErrorKind::Operational,
+            format!(
+                "cannot list the volume \"{volume_name}\" for the restore: {}",
+                String::from_utf8_lossy(&listed.stderr)
+                    .lines()
+                    .rev()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
+        ));
+    }
+    let existing: HashSet<String> = String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("/vaultline-out"))
+        .map(|rest| rest.trim_start_matches('/').to_string())
+        .collect();
+
+    // 2. The snapshot's relative files.
+    let mut incoming: Vec<String> = Vec::new();
+    collect_relative_files(snapshot_dir, "", &mut incoming);
+
+    // 3. Never-overwrite: any intersection is an error naming the file.
+    for file in &incoming {
+        if existing.contains(file) {
+            return Err(VaultlineError::new(
+                ErrorKind::Operational,
+                format!(
+                    "refusing to overwrite existing file /{file} in volume \"{volume_name}\" during promotion (remove it or choose another target)"
+                ),
+            ));
+        }
+    }
+
+    // 4. The copy (the reverse of the sidecar capture).
+    let host_half = snapshot_dir.display().to_string().replace('\\', "/");
+    info!(
+        volume = volume_name,
+        "the volume's mountpoint is not reachable from this host — restoring through a throwaway container"
+    );
+    let copied = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &format!("{volume_name}:/vaultline-out:rw"),
+            "-v",
+            &format!("{host_half}:/vaultline-src:ro"),
+            "alpine",
+            "cp",
+            "-a",
+            "/vaultline-src/.",
+            "/vaultline-out/",
+        ])
+        .output()
+        .map_err(|e| {
+            VaultlineError::with_source(
+                ErrorKind::Operational,
+                format!("cannot run the restore container for volume \"{volume_name}\""),
+                e,
+            )
+        })?;
+    if !copied.status.success() {
+        return Err(VaultlineError::new(
+            ErrorKind::Operational,
+            format!(
+                "the restore of volume \"{volume_name}\" failed: {}",
+                String::from_utf8_lossy(&copied.stderr)
+                    .lines()
+                    .rev()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
+        ));
+    }
+    Ok(incoming.len() as u64)
+}
+
+/// Collect the relative paths of every file under `dir` (the
+/// never-overwrite listing check's walk).
+fn collect_relative_files(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let rel = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        if path.is_dir() {
+            collect_relative_files(&path, &rel, out);
+        } else {
+            out.push(rel);
+        }
+    }
+}
+
 fn execute_steps(
     app: &Application,
     restored_root: &Path,
     rehearsal_root: Option<&Path>,
     manifest: &SourceManifest,
     path_map: &[(String, String)],
-) -> Result<(u64, Vec<String>, u64)> {
+) -> Result<(u64, RestoredDatabases, u64)> {
     let remap_path = |target: &str| -> String {
         match rehearsal_root {
             None => apply_path_map(target, path_map),
@@ -683,7 +952,10 @@ fn execute_steps(
     };
 
     let mut restored_files = 0u64;
-    let mut restored_databases: Vec<String> = Vec::new();
+    // (database name, the restored SQLite FILE path) — the second half
+    // lets the restore-side checks verify the RESTORED copy, never the
+    // live definition path (the 1.0-finalization finding).
+    let mut restored_databases: RestoredDatabases = Vec::new();
     let mut restored_volumes = 0u64;
 
     for step in &app.restore.steps {
@@ -720,7 +992,12 @@ fn execute_steps(
                     (_, other) => other.map(String::from),
                 };
                 restore_database(app, database, target.as_deref(), restored_root)?;
-                restored_databases.push(database.clone());
+                let sqlite_target = if db.kind == DatabaseType::Sqlite {
+                    target.clone().map(PathBuf::from)
+                } else {
+                    None
+                };
+                restored_databases.push((database.clone(), sqlite_target));
             }
             RestoreStep::RestoreVolume { volume } => {
                 // The destination is the volume as the RESTORE host
@@ -736,9 +1013,19 @@ fn execute_steps(
                     .find(|entry| entry.name == *volume)
                     .and_then(|entry| entry.path.as_deref());
                 let source_form = recorded.unwrap_or(resolved_path.as_str());
-                let target = remap_path(&resolved_path);
                 let in_snapshot = restored_root.join(trim_root(&snapshot_path_of(source_form)));
-                let count = copy_tree_into(&in_snapshot, Path::new(&target))?;
+                // When the docker-reported mountpoint is NOT reachable
+                // from this host (Docker Desktop keeps volumes inside its
+                // VM — the same environmental fact the capture pre-flight
+                // names), the bytes land through a reverse-sidecar
+                // container instead of a phantom host path (the
+                // 1.0-finalization DR-proof finding).
+                let count = if resolved.from_docker && !resolved.path.exists() {
+                    restore_docker_volume_through_container(volume, &in_snapshot)?
+                } else {
+                    let target = remap_path(&resolved_path);
+                    copy_tree_into(&in_snapshot, Path::new(&target))?
+                };
                 info!(volume, files = count, "restored volume");
                 restored_volumes += count;
             }
@@ -1279,14 +1566,16 @@ fn locate_tool(env_name: &str, tool_name: &str) -> Result<PathBuf> {
 }
 
 /// The restore-side checks (--verify): SQLite databases get integrity_check
-/// + row counts; the summary is returned for the report.
+/// with row counts against the RESTORED copy (the promoted target path,
+/// not the live definition path — the 1.0-finalization finding); the
+/// summary is returned for the report.
 fn run_restore_checks(
     app: &Application,
     snapshot_id: &str,
-    restored_databases: &[String],
+    restored_databases: &RestoredDatabases,
 ) -> Result<Vec<String>> {
     let mut notes = Vec::new();
-    for db_name in restored_databases {
+    for (db_name, restored_path) in restored_databases {
         let Some(db) = app.databases.iter().find(|d| &d.name == db_name) else {
             continue;
         };
@@ -1296,13 +1585,12 @@ fn run_restore_checks(
             ));
             continue;
         }
-        let target_path = match &db.connection {
-            DatabaseConnection::SqlitePath(path) => path.clone(),
-            _ => continue,
+        let Some(target_path) = restored_path else {
+            continue;
         };
         let sqlite3 = locate_tool("VAULTLINE_SQLITE3", "sqlite3")?;
         let output = Command::new(&sqlite3)
-            .arg(&target_path)
+            .arg(target_path)
             .arg("PRAGMA integrity_check;")
             .output()
             .map_err(|e| {

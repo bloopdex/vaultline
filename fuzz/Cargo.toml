@@ -1,0 +1,25 @@
+[package]
+name = "vaultline-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.vaultline-core]
+path = "../crates/vaultline-core"
+
+# The fuzz crate is NOT a workspace member (libFuzzer needs the nightly
+# toolchain; `cargo test --workspace` must stay stable-rust) — it is
+# excluded in the workspace Cargo.toml and built only by the fuzz CI job.
+
+[[bin]]
+name = "config_parser"
+path = "fuzz_targets/config_parser.rs"
+test = false
+doc = false
+bench = false

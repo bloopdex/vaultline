@@ -8,7 +8,7 @@ The documentation tree, organized by concern.
   engine-agnostic boundary
 - [adr/](adr/) — architecture decision records (language, engine strategy,
   the recovery model, the storage abstraction, operations, hardening,
-  reliability, release & ecosystem)
+  reliability, release & ecosystem, the 1.0 completion boundary)
 - [release/RELEASE-CHECKLIST.md](release/RELEASE-CHECKLIST.md) — the
   reproducible release procedure (tag-driven, checksummed, smoke-tested)
 
@@ -21,6 +21,8 @@ The documentation tree, organized by concern.
 
 ## Quality & operations
 
+- [disaster-recovery.md](disaster-recovery.md) — the VPS-disappears
+  runbook (discover, restore, verify, and the raw-recovery fallback)
 - [security.md](security.md) — the threat model (threat → boundary →
   defense)
 - [testing.md](testing.md) — the test strategy and how to run each layer

@@ -4,7 +4,9 @@ One file declares **one application** (the Application Recovery Definition,
 ADR-003). Unknown fields are rejected with the parser's line/column span;
 semantic rules are checked together and all failures reported at once.
 
-The annotated example (also what `vaultline init` writes):
+The annotated example (a full-shape definition; `vaultline init` writes
+a smaller template with the same rules — the template is re-validated at
+write time):
 
 ```toml
 [application]
@@ -65,8 +67,11 @@ path = "/var/backups/thornwa"   # local only
 password_env = "RESTIC_PASSWORD_THORNWA"   # never a literal
 # repository = "thornwa"        # defaults to the application name
 
-# s3 fields:  endpoint, bucket, region (optional),
-#             access_key_env, secret_key_env
+# s3 fields:  endpoint, bucket, region (optional), access_key_env,
+#             secret_key_env — every credential field names an
+#             ENVIRONMENT VARIABLE, never a literal: region names the
+#             variable whose value is exported as AWS_DEFAULT_REGION
+#             (write `region = "AWS_REGION_ENV"`, not a literal value)
 # sftp fields: host, port, user, path (remote directory),
 #              key_file (optional), known_hosts (optional)
 #   key_file:     the private key for authentication (instead of the
@@ -124,13 +129,21 @@ with an alphanumeric (`thornwa`, `thorn-wa2`; not `Thornwa`, `-thornwa`,
 
 - at least one capture target exists (sources, databases, or volumes)
 - source names unique across all source kinds; database names unique;
-  volume names unique (their identity is the name)
+  volume names unique (their identity is the name); every name
+  non-empty
+- `files.paths` non-empty, every path non-empty; git `remote`/`reference`
+  non-empty; `config_refs.path` non-empty
 - server databases require `url_env` (and reject `path`); SQLite requires
   `path` (and rejects `url_env`); SQLite rejects `format = "custom"`
 - storage: `password_env` required for every kind; per-kind required
   fields (local: `path`; s3: `endpoint`, `bucket`, `access_key_env`,
   `secret_key_env`; sftp: `host`, `user`, `path` (the remote repository
-  directory), `port` 1–65535)
+  directory), `port` 1–65535); sftp `key_file`/`known_hosts` must not
+  contain quote or newline characters (restic's sftp.args tokenizer
+  cannot represent them)
+- volumes: `capture = "pause-first"` requires `container` (and rejects
+  it otherwise); `capture = "sidecar"` alone accepts `image` (rejected
+  otherwise; the default is `alpine`)
 - retention: at least one keep count non-zero (an all-zero policy would
   delete everything on the first prune)
 - verification level 1–6
@@ -142,6 +155,10 @@ with an alphanumeric (`thornwa`, `thorn-wa2`; not `Thornwa`, `-thornwa`,
   them), so the same definition could fire at different times (ADR-005)
 - app checks: unique names, non-empty `command` (args are argv)
 - L6 requires `application.rehearsal.target` (non-empty)
+- restore: every step's referenced source/database/volume must exist in
+  the definition; `restore_files` targets, `restore_database` targets
+  (SQLite), and `wait_healthy` URLs non-empty; path-map halves
+  non-empty with unique `from` prefixes
 - volumes: `pause-first` requires `container` (the writer to pause);
   `container` with any other capture is rejected (a meaningless field
   is never silently ignored)

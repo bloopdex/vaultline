@@ -11,7 +11,8 @@ crates/vaultline-cli    the binary: command surface, logging, dispatch
 ```
 
 Dependency direction is inward: `vaultline-core` contains no engine
-behavior and no process I/O beyond reading the configuration file;
+behavior and no subprocess spawning — its only I/O is the configuration
+file and the plain-file state (state.json + the lock);
 `vaultline-cli` depends on `vaultline-core`, never the reverse. restic
 orchestration (ADR-002) lives behind the engine adapter boundary in the
 CLI layer, never inside the model.
@@ -19,7 +20,7 @@ CLI layer, never inside the model.
 ## The canonical model
 
 One internal representation shared by every feature (configuration,
-snapshot manifests, and later the state file): `Application` and
+snapshot manifests, and the state file): `Application` and
 `BackupSnapshot` in `vaultline-core::model`. The TOML wire format
 (`vaultline-core::config`) is a projection of the model: parse strict
 (`deny_unknown_fields`), validate everything (cross-references, name
@@ -46,8 +47,9 @@ suggested fixes where a fix exists.
 
 Structured logging from day one (SOT Section 14): JSON lines on stderr by
 default, `--log-format pretty` for humans, level via `RUST_LOG`. stdout is
-reserved for machine-readable command output. Named metrics are designed
-in docs/observability.md and emit once backup operations exist.
+reserved for machine-readable command output. The named metrics
+(docs/observability.md) emit from the backup, restore, prune, and
+schedule paths.
 
 ## Concurrency
 

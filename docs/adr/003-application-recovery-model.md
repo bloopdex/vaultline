@@ -52,8 +52,10 @@ proven restorable*:
 | L5 | databases restorable (scratch instance + integrity + row counts) |
 | L6 | full application recovery test (the disaster-recovery end-to-end) |
 
-A definition's verification policy names a level and a schedule; `doctor`
-reports the last-known level per snapshot.
+A definition's verification policy names a level and a schedule;
+`status` reports the latest snapshot's verification level (and
+`backup inspect` any snapshot's full record — `doctor` covers the
+environment, not per-snapshot levels).
 
 ### Retention explainability
 

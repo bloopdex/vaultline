@@ -85,9 +85,11 @@ failed dump with an embedded password prints the password nowhere).
 
 ## Revisit conditions
 
-- If rehearsals need per-run cleanup semantics beyond per-snapshot
+- ~~If rehearsals need per-run cleanup semantics beyond per-snapshot
   directories (prune cleaning forgotten snapshots' rehearsal trees is a
-  Phase 7 candidate), revisit the directory layout.
+  Phase 7 candidate), revisit the directory layout.~~ **Delivered in
+  0.7.0:** prune removes the forgotten snapshots' rehearsal directories
+  (pinned by the operations tests).
 - If app checks grow environment needs (service endpoints, ports), the
   environment contract (CWD + VAULTLINE_REHEARSAL_DIR) may gain a
   documented port-assignment hook.

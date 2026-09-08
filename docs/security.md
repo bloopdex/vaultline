@@ -53,10 +53,14 @@ threat → boundary → defense → status.
 - **Boundary**: every restic invocation.
 - **Defense**: argv arrays only — no shell interpolation, ever
   (ADR-002). Paths and values travel as arguments, not as strings to be
-  parsed. This is why the sftp `key_file` shortcut is refused: restic's
-  mechanism for it would reintroduce shell parsing.
+  parsed. The sftp `key_file`/`known_hosts` wiring (ADR-002 amendment
+  part 3) runs through restic's own argv pipeline — `-o sftp.args=`,
+  which restic tokenizes and hands to `exec.Command` as argv; no shell
+  executes anywhere in the chain, and validation rejects the quote
+  characters restic's tokenizer cannot represent.
 - **Status**: enforced in the engine layer; integration-tested end to
-  end (paths with spaces and odd characters are valid arguments).
+  end (paths with spaces and odd characters are valid arguments; the
+  sftp key-file proof runs agent-free on Windows and Linux).
 
 ## Secrets in logs and manifests
 

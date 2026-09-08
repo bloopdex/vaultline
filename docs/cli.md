@@ -7,8 +7,9 @@ vaultline init          write a commented vaultline.toml template
 vaultline validate      check a vaultline.toml and report every problem
 vaultline backup run    execute the recovery definition (restic, local/s3/sftp)
 vaultline backup list   list the snapshots recorded for this application
-vaultline backup verify prove a snapshot against the policy (L3/L4/L5) and
-                        record the level actually reached
+vaultline backup verify prove a snapshot against the policy (L3–L6, the
+                        recovery rehearsal included) and record the level
+                        actually reached
 vaultline backup inspect show a snapshot's full record
 vaultline backup prune  enforce retention: per-snapshot keep/forget decisions
                         with reasons; dry-run unless --apply
@@ -143,6 +144,7 @@ reference, integrity, reconstructs).
 
 ```
 vaultline restore <snapshot> [--config <path>] [--target DIR] [--dry-run] [--verify] [--json] [--path-map from=to]...
+vaultline restore latest --from-engine [--target DIR] [--dry-run]
 ```
 
 Executes the definition's ordered restore procedure for the snapshot:
@@ -156,7 +158,9 @@ Executes the definition's ordered restore procedure for the snapshot:
    mysql / a SQLite file placement), `restore_volume` copies the
    volume's bytes, `wait_healthy` polls the health endpoint,
 3. `--verify` then runs the restore-side checks (SQLite
-   integrity_check on the restored database).
+   integrity_check against the RESTORED copy placed at the step's
+   target — never the live definition path; server engines get an
+   honest success note, their semantic rehearsal is L5/L6).
 
 The default target is `./vaultline-restore` — never the live paths
 unless the procedure declares them. `--dry-run` prints the plan (with
@@ -164,12 +168,23 @@ each mapped target shown explicitly) and writes nothing. `--verify`
 also runs the definition's app checks against the target (same
 environment contract as L6).
 
+A restore that stops part-way explains itself (ADR-007): the error
+carries the retry guidance — earlier steps may have promoted content,
+vaultline never overwrites, so retry into a fresh target or remove the
+promoted content first.
+
 Cross-platform restore (ADR-008): `--path-map from=to` (repeatable)
 merges after the configuration's own `path_map` entries; the longest
 matching prefix wins and later entries break ties, so the CLI
 overrides the configuration. The map translates declared production
 targets into this host's layout; unmapped targets follow the OS's own
 interpretation.
+
+`--from-engine` is the raw-recovery path (docs/disaster-recovery.md):
+the WHOLE engine snapshot lands in the target without the state record
+or the procedure — the selector is `latest`, a full engine id, or a
+unique short prefix. The procedure-driven restore needs the state
+record (back up the state directory).
 
 ### App checks (ADR-006)
 
@@ -286,9 +301,13 @@ override or PATH:
 |---|---|---|
 | restic | `VAULTLINE_RESTIC_BIN` | the backup engine (ADR-002) |
 | pg_dump | `VAULTLINE_PGDUMP` | PostgreSQL custom-format dumps |
+| pg_restore | `VAULTLINE_PGRESTORE` | PostgreSQL restores |
 | mysqldump | `VAULTLINE_MYSQLDUMP` | MySQL/MariaDB dumps |
+| mysql | `VAULTLINE_MYSQL` | MySQL/MariaDB restores |
 | sqlite3 | `VAULTLINE_SQLITE3` | SQLite backups (the Online Backup API) |
+| git | — | git mirror sources |
 | docker | — | docker-volume mountpoint resolution |
+| ssh | — | the sftp backend's transport (restic execs the native client) |
 
 The repository password is read from the environment variable named in
 the configuration (`application.storage.password_env`), the database

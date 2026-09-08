@@ -7,12 +7,12 @@ Tests are part of implementation: a feature without tests is not done.
 | Layer | Where | What it pins |
 |---|---|---|
 | unit | `vaultline-core` (`#[cfg(test)]` modules) | the model's serialization contracts (application + snapshot JSON round-trips, RFC 3339 timestamps, level ordering); every validation rule (name rules, duplicates, dangling restore references, per-kind storage fields, retention sanity); the exit-code contract; state-file round-trips, version refusal, corrupt-state refusal, lock exclusivity |
-| unit | `vaultline-cli` (engine + backup + database modules) | the failure classifier against **both** restic exit-code tables (the ADR-002 amendment), tolerant `--json` summary extraction (garbage tolerated, missing summary = failure), repository URL builders for all three storage kinds, sftp key-file deferral, password-env diagnostics, connection-string parsing (URI + key=value) with sanitization that never leaks passwords into argv, the pgpass file format |
+| unit | `vaultline-cli` (engine + backup + database modules) | the failure classifier against **all three** restic exit-code tables (the ADR-002 amendment), tolerant `--json` summary extraction (garbage tolerated, missing summary = failure), repository URL builders for all three storage kinds, the sftp key/known-hosts option builder (the ADR-002 part 3 wiring, quoting pinned), password-env diagnostics, connection-string parsing (URI + key=value) with sanitization that never leaks passwords into argv, the pgpass file format |
 | template | `vaultline-cli` (template tests) | the `init` template validates for any legal name, warning-free |
 | integration | `vaultline-cli/tests/cli.rs` | the real binary against real files: `init` writes and refuses to overwrite, `validate` exit codes and output, `--json` payloads, `--version` |
 | engine integration | `vaultline-cli/tests/backup.rs` | the real binary + **the real restic binary**: end-to-end backup (init-if-needed, files + excludes, quiesce, git mirror, config-ref exclusion proven by repository listing), state recording, `backup list`, `--json` payload, wrong-password mapping, missing-restic diagnostics, lock refusal |
-| database integration | `vaultline-cli/tests/databases.rs` | **SQLite end-to-end without containers** (dump captured via the backup API, recorded metadata, restore-side `integrity_check` + row counts on the restored copy — the L5-lite proof); **PostgreSQL end-to-end** (testcontainers PostgreSQL + real pg_dump — on Windows through a container shim, on Unix from PATH; the dump is proven to be a valid `-Fc` archive by its PGDMP signature); **MinIO S3 end-to-end** (testcontainers MinIO + restic's s3 backend listing the bucket); volume direct capture (host path); the **sidecar capture round trip** (real docker volume semantics: copy-out through the sidecar container, the recorded capture path, wipe → restore → bytes intact) and the **pause-first lifecycle** (the writer is paused and unpaused again — verified by the engine’s state; the guard unpauses even when the capture fails; a stopped writer proceeds with a note) |
-| restore & verification integration | `vaultline-cli/tests/restore.rs` | the sandbox-then-promote executor (files promoted, nested content, `--dry-run` writes nothing), the no-overwrite contract, **the disaster end-to-end (backup → destroy → restore → data + database intact)**, the health-endpoint poll, verification L3 (engine cross-check), L4 (recursive content comparison, tamper → failure), L5 (SQLite rehearsal, durable state record), the **PostgreSQL pg_restore round trip** (dump → restore into a second database → row count), snapshot selectors |
+| database integration | `vaultline-cli/tests/databases.rs` | **SQLite end-to-end without containers** (dump captured via the backup API, recorded metadata, restore-side `integrity_check` + row counts on the restored copy — the L5-lite proof); **PostgreSQL end-to-end** (testcontainers PostgreSQL + real pg_dump — on Windows through a container shim, on Unix from PATH; the dump is proven to be a valid `-Fc` archive by its PGDMP signature, which the CAPTURE itself also validates — a garbage dump exiting 0 fails the backup named); **MinIO S3 end-to-end** (testcontainers MinIO + restic's s3 backend listing the bucket); volume direct capture (host path); the **sidecar capture round trip** (real docker volume semantics: copy-out through the sidecar container, the recorded capture path, wipe → restore → bytes intact) and the **pause-first lifecycle** (the writer is paused and unpaused again — verified by the engine’s state; the guard unpauses even when the capture fails; a stopped writer proceeds with a note) |
+| restore & verification integration | `vaultline-cli/tests/restore.rs` | the sandbox-then-promote executor (files promoted, nested content, `--dry-run` writes nothing), the no-overwrite contract, **the disaster end-to-end (backup → destroy → restore → data + database intact)**, the health-endpoint poll, verification L3 (engine cross-check; an engine-lost snapshot fails named), L4 (recursive content comparison, tamper → failure), L5 (SQLite rehearsal, durable state record), the **PostgreSQL pg_restore round trip** (dump → restore into a second database → row count), **restore `--verify` checks the RESTORED sqlite copy** (a corrupted live file does not fail it), the runtime invalid-restore-path messages, the concurrent-restore lock, snapshot selectors |
 | hardening integration | `vaultline-cli/tests/hardening.rs` | **the L6 rehearsal** (restores into the declared root with mirrored targets, runs the app checks — passing and failing — and records L6/L5 durably; `schedule run` at L6 rehearses), **the malicious-archive defense** (a symlink to an outside secret never leaks its content), **the corrupt-repository honesty fixture** (a truncated pack fails L2 and the next snapshot records L1), **the redaction failure test** (a failed dump with an embedded password prints the password nowhere), the **MySQL restore round trip** (dump → mysql client into a second database → rows verified, source untouched) |
 | reliability integration | `vaultline-cli/tests/operations.rs` + `tests/hardening.rs` | the **stale-lock lifecycle** (a live holder's lock refuses the run; once the holder dies the lock is reclaimed with a warning and the run proceeds — the crashed-run case), the **vanished-source defense** (a missing declared path aborts the backup naming it, no snapshot recorded), **rehearsal-directory pruning** (the forgotten snapshot's rehearsal dir is removed, the kept one remains), the **partial-restore guidance** (the no-overwrite error carries the stopped-part-way retry path), the **MariaDB restore round trip** (dump → client into a second database → rows verified), the **cross-platform restore** (a declared Unix target translates through the configuration’s path map, the dry-run plan shows the mapping, and a CLI `--path-map` entry overrides the configuration on a tie), and the platform-independent snapshot-path translation |
 | operations integration | `vaultline-cli/tests/operations.rs` | **prune** (dry-run changes nothing and explains every decision; `--apply` forgets, prunes, records, and re-runs idempotently; `--json` carries the plan), **schedule run** (due backup + verification execute once, bookkeeping recorded, second run finds nothing due), **doctor** (healthy all-ok; a broken restic override fails the check with exit 1; structured `--json`), **status** (summary + retention projection), **timer generate** (unit content incl. the translated OnCalendar, refusal without schedules, install refusal off Linux), **validate** (invalid crons and both-restricted day fields rejected) |
@@ -25,17 +25,18 @@ requirement is absent: restic (`VAULTLINE_RESTIC_BIN` or PATH), sqlite3
 (`VAULTLINE_SQLITE3` or PATH), pg_dump (`VAULTLINE_PGDUMP` or PATH), or a
 running Docker engine. CI installs restic, sqlite3, and postgresql-client
 on the ubuntu job (Docker is present on the runner, so the container-gated
-tests run hosted); the Windows job skips whatever is missing. Locally:
+tests run hosted); the Windows job skips whatever is missing. Locally,
+point the overrides at your tools:
 
 ```sh
-VAULTLINE_RESTIC_BIN=A:\BloopLab\tools\restic.exe cargo test --workspace
+VAULTLINE_RESTIC_BIN=/path/to/restic cargo test --workspace
 ```
 
 ## The container harness
 
-`tests/containers.rs` uses testcontainers (PostgreSQL today; SFTP and
-MinIO arrive with their consumers). It is `#[ignore]`d by default because
-it needs a running Docker engine:
+`tests/containers.rs` uses testcontainers (PostgreSQL; the SFTP and
+MinIO consumers live in tests/storage.rs and tests/databases.rs). It is
+`#[ignore]`d by default because it needs a running Docker engine:
 
 ```sh
 cargo test --test containers -- --ignored
@@ -62,13 +63,19 @@ the test is skipped in CI by design.
   and pause-first proofs are docker-gated but NOT Unix-gated:
   host-path volumes + real containers run on Desktop and native
   Linux alike.
-- No sanitizer fuzzing (cargo-fuzz needs the nightly toolchain) — the
-  deterministic mutation harness is the stable-rust stand-in until
-  then.
+- Sanitizer fuzzing is targeted, not blanket (the 1.0-finalization
+  decision): ONE cargo-fuzz target — the configuration parser, the
+  largest untrusted-input surface — runs as a 60-second libFuzzer+ASan
+  smoke on the nightly CI job (.github/workflows/fuzz.yml, weekly +
+  manual). The deterministic 2000-round mutation harness remains the
+  every-push proof on stable Rust. Locally the target compiles; the
+  smoke executes on the ubuntu job (Windows lacks the ASan runtime
+  DLL — recorded).
 - Benchmarks: the std-only example (examples/bench.rs) measures the
-  hot paths as medians; the baseline is committed and
-  scripts/bench-check.py gates regressions at 3x. No sanitizer fuzzing
-  yet (nightly toolchain); the mutation harness stands in.
+  hot paths as medians (configuration load+validate, retention plan,
+  cron evaluation, the state round trip, and CLI startup); the
+  baseline is committed and scripts/bench-check.py gates regressions
+  at 3x.
 
 ## Running everything
 
@@ -79,7 +86,10 @@ cargo test --workspace
 cargo vet check --store-path supply-chain
 cargo deny check
 python scripts/check-workflows.py
+python scripts/bench-check.py
+git diff --check
 ```
 
-(The maintainer checklist in CONTRIBUTING.md is the same list, in the
-order to run before every push.)
+(The maintainer checklist in CONTRIBUTING.md carries the same gates in
+the order to run before every push; bench-check and diff-check round it
+out — the release checklist treats all of them as release gates.)

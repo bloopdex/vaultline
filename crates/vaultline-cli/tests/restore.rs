@@ -469,6 +469,49 @@ fn verify_reaches_l4_and_records_it() {
         .stderr(predicate::str::contains("FAILED at L4"));
 }
 
+/// The restore-side check verifies the RESTORED copy, not the live
+/// definition path (the 1.0-finalization finding): after corrupting the
+/// live database file, `restore --verify` still passes because the
+/// restored file is what integrity_check examines.
+#[test]
+fn restore_verify_checks_the_restored_sqlite_copy() {
+    if restic_bin().is_none() || sqlite3_bin().is_none() {
+        eprintln!("skipping: restic or sqlite3 not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.backup();
+
+    // Corrupt the LIVE database file.
+    std::fs::write(&fixture.db_path, b"not a sqlite database").expect("corrupt the live db");
+
+    vaultline()
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(&fixture.restore_target)
+        .arg("--verify")
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("integrity_check ok"));
+
+    // The restored copy itself is a healthy database.
+    let check = sqlite3(&[
+        fixture
+            .restore_target
+            .join("restored.db")
+            .to_str()
+            .expect("utf8"),
+        "PRAGMA integrity_check;",
+    ]);
+    assert!(
+        check.status.success(),
+        "the restored copy passes integrity_check"
+    );
+}
+
 /// Verification L5: the SQLite dump is restored to scratch and passes
 /// integrity_check — the backup is proven restorable, not just created.
 #[test]
@@ -1059,4 +1102,194 @@ fn snapshot_selector_prefixes() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("ambiguous"));
+}
+
+/// A concurrent restore is refused by the same state lock as a backup:
+/// a live holder's lock makes `restore` fail before any snapshot work
+/// (no snapshot needed — the lock precedes selection).
+#[test]
+fn concurrent_restore_is_refused_by_the_lock() {
+    if restic_bin().is_none() || sqlite3_bin().is_none() {
+        eprintln!("skipping: restic or sqlite3 not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.backup();
+    let mut holder = if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/c", "ping -n 30 127.0.0.1 > nul"])
+            .spawn()
+            .expect("holder")
+    } else {
+        Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .expect("holder")
+    };
+    std::fs::create_dir_all(fixture.state_dir()).expect("state dir");
+    std::fs::write(
+        fixture.state_dir().join("lock"),
+        format!("pid {}\n", holder.id()),
+    )
+    .expect("lock file");
+
+    vaultline()
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("another vaultline process"));
+
+    let _ = holder.kill();
+    let _ = holder.wait();
+}
+
+/// A restore step that references a source the SNAPSHOT does not contain
+/// (declared in the definition only after the snapshot was made) fails
+/// at plan time with the snapshot's reconstructs list named.
+#[test]
+fn restore_step_referencing_an_uncaptured_source_is_named() {
+    if restic_bin().is_none() || sqlite3_bin().is_none() {
+        eprintln!("skipping: restic or sqlite3 not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.backup();
+
+    // A second database + restore step declared AFTER the snapshot:
+    // validation passes (the definition has it), the snapshot does not.
+    let second_db = fixture._dir.path().join("appdb2.sqlite");
+    let create = sqlite3(&[
+        second_db.to_str().expect("utf8"),
+        "CREATE TABLE t2(x INTEGER); INSERT INTO t2 VALUES (7);",
+    ]);
+    assert!(create.status.success(), "sqlite3 create failed");
+    let mut config = std::fs::read_to_string(&fixture.config).expect("config");
+    config.push_str(&format!(
+        "\n[[application.databases]]\nname = \"appdb2\"\nkind = \"sqlite\"\npath = \"{db}\"\nconsistency = {{ logical = {{ format = \"sql\" }} }}\n[[application.restore.steps]]\nrestore_database = {{ database = \"appdb2\", target_database = \"{target}/restored2.db\" }}\n",
+        db = toml_path(&second_db),
+        target = toml_path(&fixture.restore_target),
+    ));
+    std::fs::write(&fixture.config, config).expect("config");
+
+    vaultline()
+        .args(["restore", "latest", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(&fixture.restore_target)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("does not contain"))
+        .stderr(predicate::str::contains("appdb2"));
+}
+
+/// Verification L3 fails when the engine no longer holds the recorded
+/// snapshot (an old backup — forgotten or removed): the failure names
+/// the level and the snapshot.
+#[test]
+fn verify_fails_at_l3_when_the_engine_lost_the_snapshot() {
+    if restic_bin().is_none() || sqlite3_bin().is_none() {
+        eprintln!("skipping: restic or sqlite3 not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.backup();
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.state_dir().join("state.json")).expect("state file"),
+    )
+    .expect("state parses");
+    let engine_id =
+        state["applications"]["thornwa"]["snapshots"][0]["engine_snapshot"]["snapshot_id"]
+            .as_str()
+            .expect("engine id")
+            .to_string();
+
+    // Forget the snapshot from the engine (the product's own cross-check
+    // then finds it gone).
+    let forget = Command::new(restic_bin().expect("restic"))
+        .args([
+            "-r",
+            fixture.repo.to_str().expect("utf8"),
+            "forget",
+            &engine_id,
+        ])
+        .env("RESTIC_PASSWORD", "test-password")
+        .output()
+        .expect("restic runs");
+    assert!(
+        forget.status.success(),
+        "{}",
+        String::from_utf8_lossy(&forget.stderr)
+    );
+
+    vaultline()
+        .args(["backup", "verify", "latest", "--config"])
+        .arg(&fixture.config)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("FAILED at L3"));
+}
+
+/// The raw-recovery path (--from-engine): with the STATE FILE gone (the
+/// destroyed-host case), the engine's own snapshot list drives the
+/// restore — the whole snapshot lands in the target without the
+/// procedure (docs/disaster-recovery.md).
+#[test]
+fn from_engine_restores_without_the_state_file() {
+    if restic_bin().is_none() || sqlite3_bin().is_none() {
+        eprintln!("skipping: restic or sqlite3 not available");
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.backup();
+
+    // The state file dies with the host.
+    std::fs::remove_dir_all(fixture.state_dir()).expect("state dir removed");
+
+    let raw_target = fixture._dir.path().join("raw-recovery");
+    vaultline()
+        .args(["restore", "latest", "--from-engine", "--config"])
+        .arg(&fixture.config)
+        .arg("--target")
+        .arg(&raw_target)
+        .env("VAULTLINE_TEST_PASSWORD", "test-password")
+        .env("VAULTLINE_STATE_DIR", fixture.state_dir())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("raw recovery complete"));
+
+    // The data is back: the files source content and the database dump.
+    let hello = find_any(&raw_target, "hello.txt");
+    assert_eq!(
+        std::fs::read_to_string(hello.expect("hello.txt recovered")).expect("read"),
+        "hello world"
+    );
+    let dump = find_any(&raw_target, "appdb.db");
+    assert!(dump.is_some(), "the sqlite dump is recovered");
+}
+
+/// A recursive name search (restic stages the snapshot under the
+/// platform's path shape; the raw recovery restores it verbatim).
+fn find_any(dir: &Path, name: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_any(&path, name) {
+                return Some(found);
+            }
+        } else if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+            return Some(path);
+        }
+    }
+    None
 }

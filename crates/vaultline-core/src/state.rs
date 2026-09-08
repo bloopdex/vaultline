@@ -403,6 +403,26 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_save_leaves_the_previous_state_intact() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        let mut state = State::new();
+        state.record_snapshot("thornwa", sample_snapshot("snap-1"));
+        state.save(&path).expect("first save");
+        state.record_snapshot("thornwa", sample_snapshot("snap-2"));
+
+        // Sabotage the atomic-write path: the tmp file cannot be written
+        // (a directory sits at its name). The save must fail — and the
+        // previous state must survive byte-for-byte.
+        std::fs::create_dir(dir.path().join("state.json.tmp")).expect("sabotage");
+        assert!(state.save(&path).is_err(), "the save must fail");
+
+        let loaded = State::load(&path).expect("the old state survives");
+        assert_eq!(loaded.applications["thornwa"].snapshots.len(), 1);
+        assert_eq!(loaded.applications["thornwa"].snapshots[0].id, "snap-1");
+    }
+
+    #[test]
     fn lock_is_exclusive_and_released_on_drop() {
         let dir = tempfile::tempdir().expect("tempdir");
         let lock = StateLock::acquire(dir.path()).expect("first acquire");
