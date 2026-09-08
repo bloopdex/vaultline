@@ -38,6 +38,19 @@ closed, and the first real-world dogfooding executed (see below):
   runner**: CI grants docker-data traversal (non-fatal `chmod`), so
   the proof runs instead of skipping; the reachability gate still
   skips honestly where traversal cannot work (Docker Desktop VMs).
+- **Dogfooding round 1 — the first real consumer**: the ThornWA
+  compose stack (the stack's own postgres:16-alpine with the thornwa
+  database, the OpenWA data volume with its
+  sessions/media/plugins/sqlite shape, the Prisma migrations, the
+  `.env` reference) backed up — 1289 files, L2 verified — and
+  restored into scratch through the prod-shaped definition +
+  `--path-map` (8 migration files, all 4 OpenWA data files, 1276
+  pgdata files, 2 users rows in the restored database), each
+  independently verified. The run surfaced two real defects, both
+  fixed with regression coverage: Windows drive-absolute paths were
+  validated as "relative" (now recognized), and the sftp.args
+  quoting bug above (found by the SFTP proof's first local Windows
+  execution).
 
 ## 0.8.0 — 2026-09-07
 
