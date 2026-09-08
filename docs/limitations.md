@@ -3,89 +3,49 @@
 Each limitation in the four-part form: what is missing / why / what
 happens instead / what would remove it.
 
-## MariaDB and MySQL are both proven by round trips
-
-## The sidecar capture depends on the alpine image
-
-- **What is missing**: `capture = "sidecar"` runs a throwaway `alpine`
-  container, so the image must be present locally or pullable at
-  backup time.
-- **Why**: the sidecar's job is to reach volumes the host cannot
-  (Docker Desktop keeps mountpoints inside its VM); an image is the
-  vehicle. alpine is the smallest standard one.
-- **What happens instead**: the capture fails with the docker stderr
-  and the requirement named ("the alpine image must be present or
-  pullable"); the run is aborted, never silently incomplete.
-- **What would remove it**: a user-declared sidecar image in the
-  volume definition (the ADR-008 revisit condition).
+The 0.9.0 fix round closed five recorded entries (SFTP
+`key_file`/`known_hosts`, the agent-gated SFTP proof, the sidecar's
+hardcoded alpine image, the lock's pid-reuse window, and the
+named-volume proof's CI skip — see the ADR-002 part 3, ADR-007 and
+ADR-008 amendments). What remains:
 
 ## Docker-volume direct capture is proven on Unix, not on Desktop VMs
 
 - **What is missing**: the named docker-volume proof exists
   (`named_docker_volume_direct_capture` — a real volume, data written
   through a throwaway container, captured via the resolved mountpoint
-  and verified in the repository) but is Unix-gated AND additionally
-  gated on the mountpoint being reachable from the test process: on
-  Windows/macOS Desktop the mountpoint lives inside the Docker VM, and
-  on standard CI runners the docker-data directory is untraversable
-  for the runner user (the daemon answers on its socket; the
-  filesystem does not — recorded from the first hosted run,
-  2026-09-07). The product aborts that case honestly, naming the
-  sidecar remedy.
+  and verified in the repository). It is Unix-gated AND gated on the
+  mountpoint being reachable from the test process: on Windows/macOS
+  Desktop the mountpoint lives inside the Docker VM. On the hosted CI
+  job the proof EXECUTES (the job grants docker-data traversal; the
+  first hosted run had recorded the skip — fixed 2026-09-08).
 - **Why**: the proof runs wherever the mountpoint is visible; the
   sidecar and pause-first semantics ARE proven everywhere else
   (host-path volumes through real containers — they are exactly the
-  remedy for the mountpoint gap, and they ran green on the hosted
-  job).
-- **What happens instead**: direct/pause-first captures whose
-  docker-reported mountpoint the host cannot reach abort with an error
-  naming the sidecar remedy (the pre-flight's Desktop signature);
-  resolution failures are explicit operational errors naming the
-  volume.
-- **What would remove it**: nothing local — the gate is environmental.
+  remedy for the mountpoint gap).
+- **What happens instead**: on Desktop VMs the proof skips with the
+  reason named; direct/pause-first captures whose docker-reported
+  mountpoint the host cannot reach abort with an error naming the
+  sidecar remedy (the pre-flight's Desktop signature); resolution
+  failures are explicit operational errors naming the volume.
+- **What would remove it**: nothing local — the Desktop-VM gate is
+  environmental.
 
-## SFTP key_file / known_hosts are not wired
+## Lock start-time verification degrades on non-Linux unix
 
-- **What is missing**: an sftp storage target works with ssh-agent and
-  `~/.ssh/config`, but the `key_file` and `known_hosts` fields are
-  rejected with an explicit error.
-- **Why**: restic's mechanism for custom SSH commands (`-o
-  sftp.command`) executes a string through a shell — that conflicts with
-  the argv-only discipline (ADR-002). Wiring it safely needs a
-  documented, injection-free approach.
-- **What happens instead**: the validator accepts the fields; `backup
-  run` refuses with a clear "not wired yet" error rather than building a
-  shell string.
-- **What would remove it**: an injection-free custom-SSH mechanism or
-  restic gaining first-class key-file flags.
-
-## The SFTP proof is agent-gated; locally it needs the OpenSSH agent
-
-- **What is missing**: the SFTP end-to-end proof exists (`atmoz/sftp`
-  sshd + key authentication through the SSH agent + the real known-hosts
-  verification path) but requires a running SSH agent — on the dev
-  machine the Windows OpenSSH agent service is disabled (error 1058),
-  so the test skips with a note.
-- **Why**: the proof executes on the hosted ubuntu job (openssh-client
-  installed); locally it runs once the agent service is enabled.
-- **What happens instead**: the suite skips with the enabling
-  instructions; S3 (MinIO) and local storage remain fully proven.
-- **What would remove it**: `Start-Service ssh-agent` on the dev
-  machine (user decision).
-
-## Lock liveness uses pid reuse's accepted trade-off
-
-- **What is missing**: stale-lock recovery (ADR-007) decides "dead" by
-  pid liveness; a reused pid (a new unrelated process that inherited
-  the crashed process's pid) would read as a live holder and refuse the
-  run until manual removal.
-- **Why**: plain-file locking with pid records is the boring,
-  dependency-free contract; process start times would need per-platform
-  OS APIs.
-- **What happens instead**: the refusal names the lock file and the
-  manual fix; the liveness probe is fail-safe (unanswerable = alive).
-- **What would remove it**: a lock scheme with per-holder tokens or
-  start-time verification (revisit condition in ADR-007).
+- **What is missing**: the pid-reuse defense (ADR-007) records and
+  compares the holder's process start time. Linux reads
+  `/proc/<pid>/stat`; Windows asks PowerShell for `StartTime`. On
+  other unix (macOS, BSD) there is no probe, so the lock degrades to
+  the pre-0.9.0 liveness-only behavior: a reused pid there would read
+  as a live holder until manual removal.
+- **Why**: the product targets Linux VPSes; adding per-BSD OS APIs for
+  a fail-safe degradation path is not worth the surface.
+- **What happens instead**: liveness-only verification (the previous,
+  accepted contract); the fail-safe discipline is unchanged (an
+  unanswerable probe never reclaims).
+- **What would remove it**: a probe for the target unix (e.g. `ps -o
+  lstart=` with format normalization).
 
 ## Unmapped cross-platform targets follow the OS's interpretation
 

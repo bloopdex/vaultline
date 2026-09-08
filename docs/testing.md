@@ -50,13 +50,18 @@ the test is skipped in CI by design.
 - The systemd `install` path itself runs nowhere in CI — unit-content
   generation is fully tested; the install command's systemd interaction
   is thin (write + daemon-reload + enable) and Linux-privilege-gated.
-- The SFTP proof and the named docker-volume proof are agent- and
-  Unix-gated: they execute on the hosted ubuntu job (and locally once
-  the Windows OpenSSH agent service is enabled); the suites carry the
-  skip notes. The sidecar and pause-first proofs are docker-gated but
-  NOT Unix-gated: host-path volumes + real containers run on Desktop
-  and native Linux alike, and the hosted ubuntu runner’s Docker
-  runs them there too.
+- The SFTP proof is docker-gated and runs everywhere Docker does —
+  it authenticates with a test-owned key file through the product's
+  own `key_file`/`known_hosts` wiring (agent-free since 0.9.0: no
+  ssh-agent, no mutation of the user's `~/.ssh/known_hosts`), so it
+  executes locally on Windows and on the hosted ubuntu job. The named
+  docker-volume proof is Unix-gated AND mountpoint-reachability-gated:
+  on Desktop VMs the mountpoint lives inside the Docker VM, so the
+  proof skips there with the reason named; on the hosted job CI
+  grants docker-data traversal and the proof executes. The sidecar
+  and pause-first proofs are docker-gated but NOT Unix-gated:
+  host-path volumes + real containers run on Desktop and native
+  Linux alike.
 - No sanitizer fuzzing (cargo-fuzz needs the nightly toolchain) — the
   deterministic mutation harness is the stable-rust stand-in until
   then.

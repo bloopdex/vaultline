@@ -77,12 +77,11 @@ powershell -File scripts/release.ps1
       and the workspace version are identical (the workflow enforces it).
 
 ```powershell
-git tag -a v0.8.0 -m "vaultline 0.8.0"
+git tag -a v0.9.0 -m "vaultline 0.9.0"
 ```
 
 - [ ] Push the tag; the tag's own CI run and the release workflow both
-      complete green (hosted execution begins when the repository is
-      hosted).
+      complete green.
 - [ ] The published release carries the two binaries, `SHA256SUMS`, and
       both installers.
 

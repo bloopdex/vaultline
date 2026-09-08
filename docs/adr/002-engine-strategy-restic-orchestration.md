@@ -88,3 +88,21 @@ of returning the missing-repository exit code. Repository setup is
 therefore **init-first**: `init` creates the repository (and the bucket)
 when absent, and fails with "already exists" when present — that message
 is treated as success. There is no probe step.
+
+**Part 3 (2026-09-08, the fix round):** the sftp `key_file`/`known_hosts`
+deferral is discharged. The original objection — restic's custom-SSH
+mechanism (`-o sftp.command`) re-runs a string through a shell — was
+checked against restic's own source instead of assumed: the sftp backend
+**always** execs the native ssh client and hands it the tokens from
+`-o sftp.args=` (registered since restic 0.16.1 — apt's 0.16.4 included;
+verified in v0.16.4 and current sources) directly to `exec.Command` as
+argv. `SplitShellStrings` (internal/backend/shell_split.go) tokenizes the
+string — whitespace and backslash split outside quotes, single/double
+quotes open and close, no escapes inside quotes — so a single-quoted path
+is unambiguous, and quote/newline characters in a path are
+unrepresentable. The product therefore: builds ONE argv token
+`-o sftp.args=-o BatchMode=yes -i '<key>' -o UserKnownHostsFile='<hosts>'`
+(`BatchMode` turns prompts into clean failures — restic's stdin is the
+sftp pipe); rejects quote/newline characters in either path at
+validation; and stat-checks the declared files with a named error. No
+shell executes anywhere in the chain — the argv-only discipline holds.

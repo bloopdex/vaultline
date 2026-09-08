@@ -77,7 +77,8 @@ defining end-to-end test.
 - `vaultline version` — the versioned surfaces (binary, state schema,
   engine) in human and machine forms
 - storage backends: local (fully integration-tested), S3-compatible
-  (proven against MinIO), SFTP (URL-mapped; agent/ssh-config auth)
+  (proven against MinIO), SFTP (key-file/known-hosts wiring, or
+  agent/ssh-config auth — both proven by the end-to-end test)
 - the canonical recovery model (ADR-003), typed TOML configuration
   (ADR-004), the error model with documented exit codes, structured
   logging, named metrics, the benchmark baseline with a regression gate
@@ -86,8 +87,9 @@ defining end-to-end test.
 - release machinery: installers with checksum verification, the
   tag-driven release workflow, and the reproducible release checklist
 
-The remaining honesty items — SFTP `key_file`/`known_hosts` wiring, the
-hosting decision — are recorded in
+The remaining honesty items — the Desktop-VM mountpoint gate, the
+non-Linux-unix lock degradation, the unmapped-target OS interpretation,
+and the pre-0.8.0 capture-path fallback — are recorded in
 [docs/limitations.md](docs/limitations.md) in the four-part form.
 
 ## Quick start

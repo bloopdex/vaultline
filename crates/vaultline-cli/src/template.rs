@@ -48,15 +48,17 @@ note = "secrets — reference only"
 # name = "{name}_data"
 # capture = "direct"            # direct | sidecar | pause-first
 # container = "app"             # pause-first only: the writer container to pause
+# image = "alpine:3.20"         # sidecar only: the capture container image
 # sidecar captures through a read-only sidecar container (works where the
 # host cannot reach the volume's mountpoint — e.g. Docker Desktop); it
-# pulls the "alpine" image on first use.
+# pulls the declared image (default "alpine") on first use.
 
 # WHERE the snapshot repository lives (ADR-V0-4). Credentials are env-var
 # names, never literals. Other backends: kind = "s3" (endpoint, bucket,
 # access_key_env, secret_key_env) or kind = "sftp" (host, port, user,
-# path — the remote repository directory; key_file/known_hosts are
-# declared but not wired yet: ssh-agent and ~/.ssh/config work today).
+# path — the remote repository directory; optional key_file/known_hosts
+# wire key authentication and server-key verification through restic's
+# own argv pipeline — see docs/config.md).
 [application.storage]
 kind = "local"
 path = "/var/backups/{name}"

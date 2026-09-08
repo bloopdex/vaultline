@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.0 — 2026-09-08
+
+The fix round — every recorded product problem from the eight phases is
+closed, and the first real-world dogfooding executed (see below):
+
+- **SFTP `key_file`/`known_hosts` are wired** (ADR-002 amendment part
+  3): the declared fields reach the native ssh client through restic's
+  own argv pipeline — `-o sftp.args=` (present since restic 0.16.1, so
+  apt's 0.16.4 included), which restic tokenizes and hands to
+  `exec.Command` as argv. No shell executes anywhere (verified against
+  restic's source, not probed blindly). The product quotes the paths
+  (single quotes — unambiguous under restic's tokenizer); validation
+  rejects quote/newline characters in either path; `BatchMode=yes`
+  turns passphrase and host-key prompts into clean failures; the
+  declared files are stat-checked with a named error. The opts thread
+  through every engine invocation — backup, init, snapshots, forget,
+  prune, check, restore, the L4/L5 scratch restores, the L6 rehearsal,
+  and doctor's connectivity probe.
+- **The SFTP end-to-end proof is agent-free**: the test declares
+  `key_file` + `known_hosts` through the product and owns a temporary
+  known_hosts file — no ssh-agent, no mutation of the user's real
+  `~/.ssh/known_hosts`. It now executes locally on Windows (the
+  OpenSSH agent service is irrelevant) and on the hosted ubuntu job.
+- **The sidecar capture honors a user-declared image**: the volume's
+  `image` field (sidecar-only, like the container rule; defaults to
+  `alpine`) — the air-gapped-host condition of ADR-008's revisit list,
+  discharged.
+- **Lock start-time verification** (ADR-007 revisit condition): the
+  lock records the holder's process start time (Linux
+  `/proc/<pid>/stat`; Windows PowerShell `StartTime`; other unix
+  degrades to liveness, honestly recorded). On contention, a live pid
+  whose start time differs from the record is a REUSED pid — reclaimed
+  with the same warning. Pid-only locks written by earlier builds fall
+  back to liveness alone.
+- **The named-volume direct-capture proof executes on the hosted
+  runner**: CI grants docker-data traversal (non-fatal `chmod`), so
+  the proof runs instead of skipping; the reachability gate still
+  skips honestly where traversal cannot work (Docker Desktop VMs).
+
 ## 0.8.0 — 2026-09-07
 
 Release & ecosystem — the declared-but-not-captured era ends, restores

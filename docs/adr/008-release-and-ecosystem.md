@@ -107,7 +107,9 @@ phases.
   pause to the end of the capture). Fine for the target scale; noted
   as a revisit condition.
 - The sidecar executor needs the `alpine` image present or pullable —
-  recorded in the template and the doctor-relevant error message.
+  recorded in the template and the doctor-relevant error message. Since
+  the fix round (2026-09-08) the volume can declare its own `image`
+  (sidecar-only), so air-gapped hosts can pin a pre-loaded image.
 - Windows→Linux restore works through the platform-independent
   translation + the path map; the Linux-restore engine shape (a `C/`
   directory staged at the root) is probed against real restic and
@@ -142,5 +144,8 @@ phases.
 - If the pause window (whole backup run) becomes a problem for a
   real application, split the run: pause → capture the volume → unpause
   → capture the rest.
-- If the alpine dependency is unacceptable on air-gapped hosts,
-  revisit the sidecar image contract (a user-declared image).
+- ~~If the alpine dependency is unacceptable on air-gapped hosts,
+  revisit the sidecar image contract (a user-declared image).~~
+  **Discharged (2026-09-08, the fix round):** the volume's `image`
+  field declares the sidecar image (default `alpine`; sidecar-only,
+  validated like the container rule).

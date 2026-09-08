@@ -13,7 +13,7 @@
 # VAULTLINE_RELEASES_BASE overrides it (mirrors, self-hosted proxies).
 set -eu
 
-VERSION="${1:-0.8.0}"
+VERSION="${1:-0.9.0}"
 BASE="${VAULTLINE_RELEASES_BASE:-https://github.com/bloopdex/vaultline/releases/download}"
 
 ASSET="vaultline-${VERSION}-x86_64-unknown-linux-musl"

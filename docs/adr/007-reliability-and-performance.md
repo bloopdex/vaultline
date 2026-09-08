@@ -99,6 +99,16 @@ snapshots, cron next-occurrence, state round trip) as medians;
 
 - If restic gains a missing-path error mode, the pre-flight becomes a
   defense-in-depth check rather than the only defense.
-- If lock contention becomes a real problem on multi-admin hosts,
+- ~~If lock contention becomes a real problem on multi-admin hosts,
   revisit PID liveness (process start times) or move to a
-  lock-file-with-token scheme.
+  lock-file-with-token scheme.~~ **Discharged (2026-09-08, the fix
+  round):** the lock now records the holder's process start time at
+  acquisition (Linux `/proc/<pid>/stat`; Windows PowerShell
+  `StartTime`; other unix degrades to liveness, recorded honestly) and
+  the contention check compares it — a live pid whose start time
+  differs from the record is a REUSED pid and is reclaimed with the
+  same warning. Pid-only locks from earlier builds fall back to
+  liveness alone. The remaining theoretical gap (a pid reused by a
+  process that started at the same jiffie) is negligible; a
+  lock-file-with-token scheme stays a future option if evidence ever
+  demands it.

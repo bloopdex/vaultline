@@ -45,10 +45,13 @@ consistency = { logical = { format = "custom" } }   # custom (-Fc) | sql
 name = "thornwa_pgdata"
 capture = "direct"              # direct | sidecar | pause-first
 # container = "app"             # pause-first only: the writer to pause
+# image = "alpine:3.20"         # sidecar only: the capture container
+#                               # (defaults to `alpine`; pin it on
+#                               # air-gapped hosts)
 
 # capture semantics:
 #   direct       capture the volume's path (host path or docker mountpoint)
-#   sidecar      copy it out through a read-only alpine sidecar container
+#   sidecar      copy it out through a read-only sidecar container
 #                (works where the host cannot reach docker mountpoints,
 #                e.g. Docker Desktop; the image is pulled on first use)
 #   pause-first  pause `container` first, capture directly, ALWAYS unpause
@@ -66,6 +69,13 @@ password_env = "RESTIC_PASSWORD_THORNWA"   # never a literal
 #             access_key_env, secret_key_env
 # sftp fields: host, port, user, path (remote directory),
 #              key_file (optional), known_hosts (optional)
+#   key_file:     the private key for authentication (instead of the
+#                 agent / ~/.ssh/config)
+#   known_hosts:  the known-hosts file restic verifies the server key
+#                 against (replaces the user's ~/.ssh/known_hosts)
+#   Both are passed to the native ssh client through restic's own argv
+#   pipeline (no shell anywhere); paths must not contain quote or
+#   newline characters, and must exist as files at backup time.
 
 # --- retention ---------------------------------------------------------
 [application.retention]
