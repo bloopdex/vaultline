@@ -250,7 +250,7 @@ level = 1
     let repo_url =
         format!("sftp://vaultline-backup@127.0.0.1:{port}//home/vaultline-backup/uploads/thornwa");
     let sftp_args = format!(
-        "sftp.args=-o BatchMode=yes -i '{}' -o UserKnownHostsFile='{}'",
+        "sftp.args=-o BatchMode=yes -i '{}' -o 'UserKnownHostsFile={}'",
         toml_path(&key),
         toml_path(&known_hosts),
     );

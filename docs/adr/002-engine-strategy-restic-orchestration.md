@@ -98,11 +98,14 @@ checked against restic's own source instead of assumed: the sftp backend
 verified in v0.16.4 and current sources) directly to `exec.Command` as
 argv. `SplitShellStrings` (internal/backend/shell_split.go) tokenizes the
 string — whitespace and backslash split outside quotes, single/double
-quotes open and close, no escapes inside quotes — so a single-quoted path
-is unambiguous, and quote/newline characters in a path are
-unrepresentable. The product therefore: builds ONE argv token
-`-o sftp.args=-o BatchMode=yes -i '<key>' -o UserKnownHostsFile='<hosts>'`
+quotes open and close, no escapes inside quotes. One subtlety its
+first local Windows execution exposed (via an argv-capturing ssh shim,
+2026-09-08): the tokenizer's quotes are SEPARATORS, not concatenators —
+`Key='v'` splits into `Key=` and `v`, so an option whose value carries a
+path must be quoted whole. The product therefore builds ONE argv token
+`-o sftp.args=-o BatchMode=yes -i '<key>' -o 'UserKnownHostsFile=<hosts>'`
 (`BatchMode` turns prompts into clean failures — restic's stdin is the
 sftp pipe); rejects quote/newline characters in either path at
-validation; and stat-checks the declared files with a named error. No
-shell executes anywhere in the chain — the argv-only discipline holds.
+validation (whole-token quoting is then unambiguous); and stat-checks
+the declared files with a named error. No shell executes anywhere in
+the chain — the argv-only discipline holds.

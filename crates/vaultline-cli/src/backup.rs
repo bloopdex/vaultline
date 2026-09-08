@@ -268,13 +268,19 @@ pub fn storage_envs(app: &Application) -> Result<Vec<(String, String)>> {
 /// sftp.args=<tokens>` extends the native ssh argv restic builds —
 /// `-o BatchMode=yes` (prompts become clean failures: restic's stdin is
 /// the sftp pipe) plus `-i '<key_file>'` / `-o
-/// UserKnownHostsFile='<known_hosts>'`. Evidence (restic source,
-/// 2026-09-08): the sftp backend always execs the native ssh client and
-/// tokenizes the option string with its shell-splitter, then hands the
-/// tokens to exec.Command as argv — no shell executes anywhere in the
-/// chain. Single-quoting is unambiguous because validation rejects quote
-/// and newline characters in the paths. Returns None when neither field
-/// is declared (the agent / ~/.ssh/config path, unchanged).
+/// 'UserKnownHostsFile=<known_hosts>'`. Evidence (restic source +
+/// an argv-capturing ssh shim probe, 2026-09-08): the sftp backend
+/// always execs the native ssh client and tokenizes the option string
+/// with its shell-splitter, then hands the tokens to exec.Command as
+/// argv — no shell executes anywhere in the chain. One tokenizer
+/// subtlety the shim probe caught: its quotes are SEPARATORS, not
+/// concatenators — `Key='v'` splits into `Key=` and `v`, so an option
+/// whose value carries a path must be quoted WHOLE ('Key=v'), while
+/// `-i '<path>'` is correct as two tokens (the path is its own
+/// argument). Validation rejects quote and newline characters in the
+/// paths, so whole-token quoting is unambiguous. Returns None when
+/// neither field is declared (the agent / ~/.ssh/config path,
+/// unchanged).
 pub fn restic_sftp_opts(app: &Application) -> Option<Vec<String>> {
     let StorageKind::Sftp {
         key_file,
@@ -292,7 +298,7 @@ pub fn restic_sftp_opts(app: &Application) -> Option<Vec<String>> {
         tokens.push(format!("-i '{key}'"));
     }
     if let Some(hosts) = known_hosts {
-        tokens.push(format!("-o UserKnownHostsFile='{hosts}'"));
+        tokens.push(format!("-o 'UserKnownHostsFile={hosts}'"));
     }
     Some(vec![
         "-o".to_string(),
@@ -1055,12 +1061,14 @@ mod tests {
         assert_eq!(
             restic_sftp_opts(&app).expect("opts"),
             // The single restic argv pair: the tokens extend the native
-            // ssh invocation restic builds. Paths are single-quoted
-            // (restic's own tokenizer; no shell executes anywhere);
-            // BatchMode turns prompts into clean failures.
+            // ssh invocation restic builds. The tokenizer's quotes are
+            // separators, not concatenators (the shim-probed subtlety),
+            // so the option carrying the path is quoted WHOLE; the key
+            // path is its own token after -i. No shell executes
+            // anywhere; BatchMode turns prompts into clean failures.
             vec![
                 "-o".to_string(),
-                "sftp.args=-o BatchMode=yes -i '/home/me/key' -o UserKnownHostsFile='/home/me/known hosts'"
+                "sftp.args=-o BatchMode=yes -i '/home/me/key' -o 'UserKnownHostsFile=/home/me/known hosts'"
                     .to_string(),
             ]
         );
@@ -1103,7 +1111,7 @@ mod tests {
             restic_sftp_opts(&app).expect("opts"),
             vec![
                 "-o".to_string(),
-                "sftp.args=-o BatchMode=yes -o UserKnownHostsFile='/home/me/known_hosts'"
+                "sftp.args=-o BatchMode=yes -o 'UserKnownHostsFile=/home/me/known_hosts'"
                     .to_string()
             ]
         );

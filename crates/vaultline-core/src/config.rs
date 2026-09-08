@@ -320,6 +320,13 @@ impl ValidationOutcome {
     }
 }
 
+/// Whether a declared path is absolute on its host: a leading `/`, or a
+/// Windows drive prefix (`C:/...` — the dogfooding finding 2026-09-08:
+/// the earlier check warned on drive-absolute paths as "relative").
+fn is_absolute_host_path(path: &str) -> bool {
+    path.starts_with('/') || (path.len() >= 2 && path.as_bytes()[1] == b':')
+}
+
 /// Validate a parsed configuration file. **Every** failure is collected —
 /// callers print the whole list, never just the first.
 pub fn validate(config: ConfigFile) -> ValidationOutcome {
@@ -375,7 +382,7 @@ pub fn validate(config: ConfigFile) -> ValidationOutcome {
                     format!("application.sources.files[{i}].paths[{j}]"),
                     "must not be empty",
                 ));
-            } else if !path.starts_with('/') {
+            } else if !is_absolute_host_path(path) {
                 warnings.push(Warning::new(format!(
                     "application.sources.files[{i}].paths[{j}]: \"{path}\" is relative — it is resolved on the target host, not locally"
                 )));
@@ -1441,6 +1448,40 @@ level = 1
             }),
             "{:?}",
             outcome.errors
+        );
+    }
+
+    #[test]
+    fn drive_absolute_paths_are_not_flagged_relative() {
+        // The dogfooding finding (2026-09-08): a Windows drive path is
+        // absolute on its host; only genuinely relative paths warn.
+        let win = VALID.replace(
+            r#"paths = ["/srv/thornwa/uploads"]"#,
+            r#"paths = ["C:/ThornWA/uploads"]"#,
+        );
+        let outcome = validate(parse_str(&win).expect("parse"));
+        assert!(outcome.is_valid(), "{:?}", outcome.errors);
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("relative")),
+            "{:?}",
+            outcome.warnings
+        );
+
+        let relative = VALID.replace(
+            r#"paths = ["/srv/thornwa/uploads"]"#,
+            r#"paths = ["uploads"]"#,
+        );
+        let outcome = validate(parse_str(&relative).expect("parse"));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("relative")),
+            "{:?}",
+            outcome.warnings
         );
     }
 
